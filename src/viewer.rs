@@ -110,7 +110,7 @@ struct LoadResult {
 
 pub struct CachedImage {
     id: TextureId,
-    _view: wgpu::TextureView,
+    view: wgpu::TextureView,
     _texture: wgpu::Texture,
     _zero_copy: Option<ZeroCopyAllocation>,
     pub width: u32,
@@ -234,6 +234,24 @@ impl ViewerService {
             .map(|(_, image)| image.id)
     }
 
+    /// The cached full-image texture, for callers that need the underlying
+    /// wgpu objects (the grade pass). Mirrors [`ViewerService::texture_id`].
+    pub fn base_texture(
+        &mut self,
+        path: &Path,
+        target: [u32; 2],
+    ) -> Option<(TextureId, wgpu::TextureView, [u32; 2])> {
+        let key = CacheKey::new(path.to_path_buf(), target);
+        if let Some(image) = self.cache.get(&key) {
+            return Some((image.id, image.view.clone(), [image.width, image.height]));
+        }
+        self.cache
+            .iter()
+            .find(|(candidate, image)| {
+                candidate.path == path && image.width >= target[0] && image.height >= target[1]
+            })
+            .map(|(_, image)| (image.id, image.view.clone(), [image.width, image.height]))
+    }
 
     pub fn source_dimensions(&self, path: &Path) -> Option<[u32; 2]> {
         self.dimensions.get(path).copied()
@@ -270,7 +288,7 @@ impl ViewerService {
                     let bytes = uploaded.width as u64 * uploaded.height as u64 * 4;
                     let image = CachedImage {
                         id,
-                        _view: uploaded.view,
+                        view: uploaded.view,
                         _texture: uploaded.texture,
                         _zero_copy: uploaded.zero_copy,
                         width: uploaded.width,

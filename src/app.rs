@@ -1,3 +1,4 @@
+use crate::grade::{gpu::GradePass, EditState};
 use crate::model::{is_image, ImageItem, SortKey, ThumbSize};
 use crate::scan::{spawn_scan, ScanOutcome};
 use crate::theme::{self, Palette, ThemeMode};
@@ -9,7 +10,7 @@ use egui::{
     Align, Align2, Color32, CornerRadius, FontId, Frame, Id, Layout, Margin, Rect, RichText, Sense,
     Stroke, StrokeKind, Ui, Vec2,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -17,9 +18,9 @@ const GRID_GAP: f32 = 12.0;
 const GRID_PAD: f32 = 18.0;
 
 pub struct GalleryApp {
-    theme_mode: ThemeMode,
-    palette: Palette,
-    show_sidebar: bool,
+    pub(crate) theme_mode: ThemeMode,
+    pub(crate) palette: Palette,
+    pub(crate) show_sidebar: bool,
     places: Vec<Place>,
     root: FolderNode,
     expanded: HashSet<PathBuf>,
@@ -42,7 +43,10 @@ pub struct GalleryApp {
     scanning: bool,
     scan_elapsed: Option<Duration>,
     thumbs: ThumbnailStore,
-    viewer: ViewerService,
+    pub(crate) viewer: ViewerService,
+    pub(crate) edit_panel_open: bool,
+    pub(crate) edits: HashMap<PathBuf, EditState>,
+    pub(crate) grade: GradePass,
     toast: Option<Toast>,
     pending_open: Option<PathBuf>,
     last_search: String,
@@ -157,6 +161,13 @@ impl GalleryApp {
             scan_elapsed: None,
             thumbs: ThumbnailStore::new(),
             viewer: ViewerService::new(
+                cc.wgpu_render_state
+                    .as_ref()
+                    .expect("wgpu render state is available with the wgpu renderer"),
+            ),
+            edit_panel_open: false,
+            edits: HashMap::new(),
+            grade: GradePass::new(
                 cc.wgpu_render_state
                     .as_ref()
                     .expect("wgpu render state is available with the wgpu renderer"),
@@ -336,6 +347,15 @@ impl GalleryApp {
     fn close_viewer(&mut self) {
         self.viewer_open = false;
         self.viewer.deactivate();
+        self.grade.release();
+    }
+
+    /// Path of the image currently shown in the viewer.
+    pub(crate) fn current_viewer_path(&self) -> Option<PathBuf> {
+        self.visible
+            .get(self.viewer_index)
+            .and_then(|index| self.all_items.get(*index))
+            .map(|item| item.path.clone())
     }
 
     fn step_viewer(&mut self, delta: isize) {
@@ -390,7 +410,9 @@ impl GalleryApp {
 
         let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
         if escape {
-            if self.viewer_open {
+            if self.edit_panel_open {
+                self.toggle_edit_panel();
+            } else if self.viewer_open {
                 self.close_viewer();
             } else {
                 if !self.search.is_empty() {
@@ -407,6 +429,9 @@ impl GalleryApp {
         }
 
         if self.viewer_open {
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::E)) {
+                self.toggle_edit_panel();
+            }
             let left = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft));
             let right = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight));
             if left {
@@ -456,6 +481,13 @@ impl GalleryApp {
         }
     }
 
+    fn toggle_edit_panel(&mut self) {
+        self.edit_panel_open = !self.edit_panel_open;
+        if !self.edit_panel_open {
+            self.grade.release();
+        }
+    }
+
     fn top_bar(&mut self, ctx: &egui::Context) {
         let palette = self.palette;
         egui::TopBottomPanel::top("top_bar")
@@ -489,6 +521,13 @@ impl GalleryApp {
                     ui.add_space(10.0);
                     if w::flat_button(ui, "Open Folder", palette).clicked() {
                         self.pick_folder();
+                    }
+                    if self.viewer_open
+                        && w::flat_button(ui, "Adjust", palette)
+                            .on_hover_text("Crop and color grade (E)")
+                            .clicked()
+                    {
+                        self.toggle_edit_panel();
                     }
                     if w::symbol_button(ui, "⟳", palette)
                         .on_hover_text("Refresh")
@@ -985,9 +1024,33 @@ impl GalleryApp {
             self.thumbs.request(&item.path);
         }
 
-        if let Some(texture_id) = full_texture {
-            if let Some(dimensions) = dimensions {
-                let texture_size = Vec2::new(dimensions[0] as f32, dimensions[1] as f32);
+        // Route through the grade pass when the panel is open.
+        let mut texture_id = full_texture;
+        let mut drawn_size = dimensions.map(|d| Vec2::new(d[0] as f32, d[1] as f32));
+        if self.edit_panel_open && full_texture.is_some() && dimensions.is_some() {
+            let base = self.viewer.base_texture(&item.path, target);
+            if let Some((base_id, base_view, base_size)) = base {
+                let state = self.edits.get(&item.path).cloned().unwrap_or_default();
+                if !state.is_identity() {
+                    let graded = self.grade.ensure(
+                        &item.path,
+                        &base_view,
+                        base_id,
+                        base_size,
+                        dimensions.unwrap(),
+                        &state,
+                    );
+                    if let Some(graded) = graded {
+                        texture_id = Some(graded);
+                        let display = state.display_size(dimensions.unwrap_or(base_size));
+                        drawn_size = Some(Vec2::new(display[0] as f32, display[1] as f32));
+                    }
+                }
+            }
+        }
+
+        if let Some(crate_texture_id) = texture_id {
+            if let Some(texture_size) = drawn_size {
                 let scale = (available.width() / texture_size.x)
                     .min(available.height() / texture_size.y)
                     .min(1.0);
@@ -997,7 +1060,7 @@ impl GalleryApp {
                     ui.painter()
                         .rect_filled(rect.expand(2.0), CornerRadius::same(4), palette.shadow);
                 }
-                draw_texture(ui, texture_id, rect, Color32::WHITE);
+                draw_texture(ui, crate_texture_id, rect, Color32::WHITE);
             }
         } else if let Some(error) = &self.viewer.error {
             ui.allocate_ui_with_layout(
@@ -1118,6 +1181,9 @@ impl eframe::App for GalleryApp {
         self.top_bar(ctx);
         if self.show_sidebar {
             self.sidebar(ctx);
+        }
+        if self.viewer_open && self.edit_panel_open {
+            crate::ui::edit_panel::show(self, ctx);
         }
         self.central(ctx);
         self.sync_filters();

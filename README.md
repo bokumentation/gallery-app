@@ -2,12 +2,6 @@
 
 A fast, GNOME-style image gallery built with Rust, egui, and wgpu/Vulkan.
 
-| Dark | Light |
-| --- | --- |
-| ![dark](docs/screenshot-dark.png) | ![light](docs/screenshot-light.png) |
-
-![viewer](docs/screenshot-viewer.png)
-
 ## Features
 
 - GNOME/Adwaita-inspired light and dark themes, following the system color scheme on startup
@@ -108,6 +102,13 @@ display texture. No image pixels cross PCIe or the CPU after decoding.
 
 ## Roadmap
 
+- Right-side edit panel: cropping (aspect presets, straightening, rotate/flip) and color grading
+  (exposure, contrast, highlights/shadows/whites/blacks, temperature/tint, saturation/vibrance/hue,
+  HSL color mixer, split toning) with a live GPU preview through a WGSL compute pass
+- Export with a GPU-resident pipeline: full-resolution decode → WGSL geometry + grade →
+  nvJPEG GPU encode from device memory (JPEG never crosses to the host), plus a per-image
+  sidecar JSON storing the edit recipe
+- Full-resolution display textures: dedicated 100% viewing
 - Thumbnail cache size limit and cleanup
 - Remember last folder, window size, and theme between launches
 - Zoom/pan in the viewer

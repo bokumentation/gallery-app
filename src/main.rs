@@ -1,4 +1,5 @@
 mod app;
+mod grade;
 mod model;
 mod nvjpeg;
 mod scan;

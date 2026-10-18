@@ -124,6 +124,23 @@ pub fn switch(ui: &mut Ui, on: &mut bool, palette: Palette) -> Response {
     response
 }
 
+/// Adwaita-styled labelled slider; returns true when the value changed.
+pub fn slider(
+    ui: &mut Ui,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    step: f32,
+    label: &str,
+) -> bool {
+    let before = *value;
+    let slider = egui::Slider::new(value, range)
+        .step_by(step as f64)
+        .show_value(true)
+        .text(label);
+    let response = ui.add(slider);
+    response.changed() && *value != before
+}
+
 pub fn search_field(ui: &mut Ui, text: &mut String, width: f32, palette: Palette) -> bool {
     let total = Vec2::new(width + 68.0, 32.0);
     let (rect, _) = ui.allocate_exact_size(total, Sense::hover());
