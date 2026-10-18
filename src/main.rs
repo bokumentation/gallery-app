@@ -1,6 +1,11 @@
 mod app;
+mod crop;
+mod export;
+mod grade;
+mod luts;
 mod model;
 mod nvjpeg;
+mod reveal;
 mod scan;
 mod theme;
 mod thumbs;
@@ -16,7 +21,7 @@ fn main() -> eframe::Result<()> {
     )
     .init();
 
-    let mut setup = egui_wgpu::WgpuSetupCreateNew::default();
+    let mut setup = egui_wgpu::WgpuSetupCreateNew::without_display_handle();
     setup.instance_descriptor.backends = wgpu::Backends::VULKAN | wgpu::Backends::GL;
     setup.power_preference = wgpu::PowerPreference::HighPerformance;
     setup.native_adapter_selector = Some(Arc::new(|adapters, _surface| {
@@ -55,7 +60,7 @@ fn main() -> eframe::Result<()> {
     }));
 
     let wgpu_options = egui_wgpu::WgpuConfiguration {
-        present_mode: wgpu::PresentMode::AutoVsync,
+        surface: egui_wgpu::SurfaceConfig::LOW_LATENCY,
         wgpu_setup: egui_wgpu::WgpuSetup::CreateNew(setup),
         ..Default::default()
     };
@@ -64,10 +69,19 @@ fn main() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1400.0, 900.0])
             .with_min_inner_size([880.0, 560.0])
-            .with_title("Gallery"),
+            .with_title(app::APP_NAME)
+            .with_app_id("gallery-app")
+            // Custom GNOME-style header bar and rounded shell. The window
+            // surface is transparent so the corners outside the rounded
+            // background stay transparent.
+            .with_decorations(false)
+            .with_transparent(true),
         renderer: eframe::Renderer::Wgpu,
         wgpu_options,
         centered: true,
+        // egui feather-antialiases geometry already; 4x MSAA additionally
+        // smooths the image quads and costs little on this GPU.
+        multisampling: 4,
         ..Default::default()
     };
 
@@ -79,7 +93,7 @@ fn main() -> eframe::Result<()> {
         .or_else(dirs::home_dir);
 
     eframe::run_native(
-        "Gallery",
+        app::APP_NAME,
         options,
         Box::new(move |cc| Ok(Box::new(app::GalleryApp::new(cc, start_dir)))),
     )

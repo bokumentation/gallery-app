@@ -1,8 +1,7 @@
 use egui::{
-    Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Margin, Stroke, TextStyle,
-    Visuals,
+    Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Margin, Stroke,
+    TextStyle, Visuals,
 };
-use std::path::Path;
 use std::sync::Arc;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -53,185 +52,43 @@ pub fn system_prefers_dark() -> bool {
     true
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct Palette {
-    pub dark: bool,
-    pub bg: Color32,
-    pub sidebar: Color32,
-    pub header: Color32,
-    pub card: Color32,
-    pub card_hover: Color32,
-    pub border: Color32,
-    pub text: Color32,
-    pub dim: Color32,
-    pub accent: Color32,
-    pub accent_hover: Color32,
-    pub on_accent: Color32,
-    pub error: Color32,
-    pub shadow: Color32,
-}
+pub use crate::ui::tokens::Palette;
 
-impl Palette {
-    pub fn dark() -> Self {
-        Self {
-            dark: true,
-            bg: Color32::from_rgb(30, 30, 30),
-            sidebar: Color32::from_rgb(48, 48, 48),
-            header: Color32::from_rgb(48, 48, 48),
-            card: Color32::from_rgb(43, 43, 43),
-            card_hover: Color32::from_rgb(56, 56, 56),
-            border: Color32::from_rgba_unmultiplied(255, 255, 255, 30),
-            text: Color32::from_rgb(255, 255, 255),
-            dim: Color32::from_rgb(181, 181, 181),
-            accent: Color32::from_rgb(53, 132, 228),
-            accent_hover: Color32::from_rgb(74, 148, 240),
-            on_accent: Color32::from_rgb(255, 255, 255),
-            error: Color32::from_rgb(255, 98, 98),
-            shadow: Color32::from_black_alpha(70),
-        }
-    }
+/// One type ramp for the whole app. Keep every new label on one of these
+/// roles instead of picking a size at the call site.
+pub const TEXT_CAPTION: f32 = 10.5;
+pub const TEXT_SMALL: f32 = 11.5;
+pub const TEXT_BODY: f32 = 12.5;
+pub const TEXT_SECTION: f32 = 12.5;
+pub const TEXT_TITLE: f32 = 15.0;
+pub const TEXT_HEADING: f32 = 17.0;
 
-    pub fn light() -> Self {
-        Self {
-            dark: false,
-            bg: Color32::from_rgb(255, 255, 255),
-            sidebar: Color32::from_rgb(235, 235, 235),
-            header: Color32::from_rgb(246, 246, 246),
-            card: Color32::from_rgb(242, 242, 242),
-            card_hover: Color32::from_rgb(230, 230, 230),
-            border: Color32::from_rgba_unmultiplied(0, 0, 0, 25),
-            text: Color32::from_rgb(29, 29, 29),
-            dim: Color32::from_rgb(110, 110, 110),
-            accent: Color32::from_rgb(53, 132, 228),
-            accent_hover: Color32::from_rgb(42, 118, 210),
-            on_accent: Color32::from_rgb(255, 255, 255),
-            error: Color32::from_rgb(192, 28, 40),
-            shadow: Color32::from_black_alpha(30),
-        }
-    }
-
-    pub fn from_mode(mode: ThemeMode) -> Self {
-        let dark = match mode {
-            ThemeMode::System => system_prefers_dark(),
-            ThemeMode::Light => false,
-            ThemeMode::Dark => true,
-        };
-        if dark {
-            Self::dark()
-        } else {
-            Self::light()
-        }
-    }
-}
+/// Bundled Inter text faces (SIL OFL 1.1, see `assets/fonts/LICENSE.txt`). The
+/// release's static text cut renders better at UI sizes than the 18 pt
+/// optical-size cut.
+const INTER_REGULAR: &[u8] = include_bytes!("../assets/fonts/Inter-Regular.ttf");
+const INTER_SEMIBOLD: &[u8] = include_bytes!("../assets/fonts/Inter-SemiBold.ttf");
 
 pub fn install_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
-    let available = system_font_files();
 
-    let regular = pick_font(
-        &available,
-        &[
-            "Inter_18pt-Regular.ttf",
-            "Inter-Regular.ttf",
-            "AdwaitaSans-Regular.ttf",
-            "Cantarell-Regular.ttf",
-            "Ubuntu-R.ttf",
-        ],
+    fonts.font_data.insert(
+        "gallery-ui".to_owned(),
+        Arc::new(FontData::from_owned(INTER_REGULAR.to_vec())),
     );
-
-    let bold = pick_font(
-        &available,
-        &[
-            "Inter_18pt-SemiBold.ttf",
-            "Inter_18pt-Bold.ttf",
-            "Inter-Bold.ttf",
-            "AdwaitaSans-Bold.ttf",
-            "Cantarell-Bold.ttf",
-        ],
+    fonts.font_data.insert(
+        "gallery-bold".to_owned(),
+        Arc::new(FontData::from_owned(INTER_SEMIBOLD.to_vec())),
     );
-
-    if let Some(path) = regular {
-        if let Ok(bytes) = std::fs::read(path) {
-            fonts
-                .font_data
-                .insert("gallery-ui".to_owned(), Arc::new(FontData::from_owned(bytes)));
-            if let Some(family) = fonts.families.get_mut(&FontFamily::Proportional) {
-                family.insert(0, "gallery-ui".to_owned());
-            }
-        }
+    if let Some(family) = fonts.families.get_mut(&FontFamily::Proportional) {
+        family.insert(0, "gallery-ui".to_owned());
     }
-
-    if let Some(path) = bold {
-        if let Ok(bytes) = std::fs::read(path) {
-            fonts
-                .font_data
-                .insert("gallery-bold".to_owned(), Arc::new(FontData::from_owned(bytes)));
-            fonts.families.insert(
-                FontFamily::Name("gallery-bold".into()),
-                vec!["gallery-bold".to_owned(), "gallery-ui".to_owned()],
-            );
-        }
-    }
-
-    if !fonts.families.contains_key(&FontFamily::Name("gallery-bold".into())) {
-        fonts.families.insert(
-            FontFamily::Name("gallery-bold".into()),
-            vec!["gallery-ui".to_owned()],
-        );
-    }
+    fonts.families.insert(
+        FontFamily::Name("gallery-bold".into()),
+        vec!["gallery-bold".to_owned(), "gallery-ui".to_owned()],
+    );
 
     ctx.set_fonts(fonts);
-}
-
-fn system_font_files() -> Vec<std::path::PathBuf> {
-    let mut roots = Vec::new();
-    if let Some(dir) = dirs::data_local_dir() {
-        roots.push(dir.join("fonts"));
-    }
-    if let Some(dir) = dirs::home_dir() {
-        roots.push(dir.join(".local/share/fonts"));
-        roots.push(dir.join(".fonts"));
-    }
-    roots.push(std::path::PathBuf::from("/usr/local/share/fonts"));
-    roots.push(std::path::PathBuf::from("/usr/share/fonts"));
-
-    let mut files = Vec::new();
-    for root in roots {
-        if !root.is_dir() {
-            continue;
-        }
-        for entry in walkdir::WalkDir::new(root)
-            .max_depth(4)
-            .follow_links(false)
-            .into_iter()
-            .flatten()
-        {
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            let name = entry.file_name().to_string_lossy();
-            if name.ends_with(".ttf") || name.ends_with(".otf") {
-                files.push(entry.into_path());
-            }
-        }
-    }
-    files
-}
-
-fn pick_font<'a>(
-    files: &'a [std::path::PathBuf],
-    names: &[&str],
-) -> Option<&'a Path> {
-    names.iter().find_map(|name| {
-        files
-            .iter()
-            .find(|path| {
-                path.file_name()
-                    .map(|file| file.to_string_lossy() == *name)
-                    .unwrap_or(false)
-            })
-            .map(|path| path.as_path())
-    })
 }
 
 pub fn bold_font(size: f32) -> FontId {
@@ -239,6 +96,7 @@ pub fn bold_font(size: f32) -> FontId {
 }
 
 pub fn apply(ctx: &egui::Context, palette: Palette) {
+    let m = palette.metrics;
     let mut visuals = if palette.dark {
         Visuals::dark()
     } else {
@@ -246,71 +104,134 @@ pub fn apply(ctx: &egui::Context, palette: Palette) {
     };
 
     visuals.dark_mode = palette.dark;
-    visuals.panel_fill = palette.bg;
+    // Panels paint their own surfaces; the window background is drawn once in
+    // `GalleryApp::ui` so the transparent corners stay transparent.
+    visuals.panel_fill = Color32::TRANSPARENT;
     visuals.window_fill = palette.sidebar;
-    visuals.extreme_bg_color = if palette.dark {
-        Color32::from_rgb(36, 36, 36)
-    } else {
-        Color32::from_rgb(255, 255, 255)
-    };
-    visuals.text_edit_bg_color = Some(visuals.extreme_bg_color);
+    visuals.extreme_bg_color = palette.card;
+    visuals.text_edit_bg_color = Some(palette.card);
     visuals.faint_bg_color = palette.card;
     visuals.code_bg_color = palette.card;
     visuals.window_stroke = Stroke::new(1.0, palette.border);
-    visuals.window_corner_radius = CornerRadius::same(12);
-    visuals.menu_corner_radius = CornerRadius::same(10);
-    visuals.hyperlink_color = palette.accent;
+    visuals.window_corner_radius = CornerRadius::same(m.radius_lg);
+    visuals.menu_corner_radius = CornerRadius::same(m.radius_md);
+    visuals.hyperlink_color = palette.text;
     visuals.error_fg_color = palette.error;
 
     visuals.selection.bg_fill = palette.accent;
     visuals.selection.stroke = Stroke::new(1.0, palette.on_accent);
 
-    visuals.widgets.noninteractive.bg_fill = palette.sidebar;
-    visuals.widgets.noninteractive.weak_bg_fill = palette.sidebar;
+    // egui's sub-pixel glyph binning buys even kerning at the cost of blurrier
+    // text; hinting stays on for crisp stems.
+    visuals.text_options.subpixel_binning = false;
+    visuals.text_options.font_hinting = true;
+
+    visuals.widgets.noninteractive.bg_fill = palette.bg;
+    visuals.widgets.noninteractive.weak_bg_fill = palette.bg;
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, palette.border);
     visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, palette.text);
-    visuals.widgets.noninteractive.corner_radius = CornerRadius::same(8);
+    visuals.widgets.noninteractive.corner_radius = CornerRadius::same(m.radius_md);
 
-    visuals.widgets.inactive.bg_fill = palette.card;
+    visuals.widgets.inactive.bg_fill = palette.input;
     visuals.widgets.inactive.weak_bg_fill = palette.card;
-    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, Color32::TRANSPARENT);
+    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, palette.input);
     visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, palette.text);
-    visuals.widgets.inactive.corner_radius = CornerRadius::same(8);
+    visuals.widgets.inactive.corner_radius = CornerRadius::same(m.radius_md);
 
     visuals.widgets.hovered.bg_fill = palette.card_hover;
     visuals.widgets.hovered.weak_bg_fill = palette.card_hover;
     visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, palette.border);
     visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, palette.text);
-    visuals.widgets.hovered.corner_radius = CornerRadius::same(8);
+    visuals.widgets.hovered.corner_radius = CornerRadius::same(m.radius_md);
 
     visuals.widgets.active.bg_fill = palette.accent;
     visuals.widgets.active.weak_bg_fill = palette.accent;
     visuals.widgets.active.bg_stroke = Stroke::new(1.0, palette.accent_hover);
     visuals.widgets.active.fg_stroke = Stroke::new(1.0, palette.on_accent);
-    visuals.widgets.active.corner_radius = CornerRadius::same(8);
+    visuals.widgets.active.corner_radius = CornerRadius::same(m.radius_md);
 
     visuals.widgets.open.bg_fill = palette.card;
     visuals.widgets.open.weak_bg_fill = palette.card;
     visuals.widgets.open.bg_stroke = Stroke::new(1.0, palette.border);
     visuals.widgets.open.fg_stroke = Stroke::new(1.0, palette.text);
-    visuals.widgets.open.corner_radius = CornerRadius::same(8);
+    visuals.widgets.open.corner_radius = CornerRadius::same(m.radius_md);
 
-    let mut style = (*ctx.style()).clone();
-    style.visuals = visuals;
-    style.animation_time = 0.12;
-    style.spacing.item_spacing = egui::vec2(8.0, 8.0);
-    style.spacing.button_padding = egui::vec2(10.0, 6.0);
-    style.spacing.menu_margin = Margin::same(8);
-    style.spacing.indent = 16.0;
-    style.spacing.interact_size = egui::vec2(32.0, 30.0);
-    style.text_styles = [
-        (TextStyle::Heading, bold_font(19.0)),
-        (TextStyle::Body, FontId::proportional(14.0)),
-        (TextStyle::Button, FontId::proportional(14.0)),
-        (TextStyle::Small, FontId::proportional(12.0)),
-        (TextStyle::Monospace, FontId::monospace(13.0)),
-    ]
-    .into();
+    ctx.all_styles_mut(|style| {
+        style.visuals = visuals.clone();
+        style.animation_time = 0.12;
+        style.spacing.item_spacing = egui::vec2(6.0, 4.0);
+        style.spacing.button_padding = egui::vec2(8.0, 4.0);
+        style.spacing.menu_margin = Margin::same(m.space_xs as i8);
+        style.spacing.indent = 12.0;
+        style.spacing.interact_size = egui::vec2(m.icon_button, m.control_h_md);
+        // Floating scrollbars: hidden at rest, fade in over the panel, and
+        // expand when the bar itself is hovered. Because they overlay the
+        // content they reserve no width, so panel/grid layout never jumps.
+        style.spacing.scroll.floating = true;
+        style.spacing.scroll.bar_width = 8.0;
+        style.spacing.scroll.floating_width = 4.0;
+        style.spacing.scroll.floating_allocated_width = 0.0;
+        style.spacing.scroll.handle_min_length = 24.0;
+        style.spacing.scroll.bar_inner_margin = 2.0;
+        style.spacing.scroll.bar_outer_margin = 2.0;
+        style.spacing.scroll.content_margin = Margin::ZERO;
+        style.spacing.scroll.foreground_color = false;
+        style.spacing.scroll.dormant_handle_opacity = 0.0;
+        style.spacing.scroll.active_handle_opacity = if palette.dark { 0.55 } else { 0.7 };
+        style.spacing.scroll.interact_handle_opacity = if palette.dark { 0.9 } else { 1.0 };
+        style.spacing.scroll.dormant_background_opacity = 0.0;
+        style.spacing.scroll.active_background_opacity = 0.0;
+        style.spacing.scroll.interact_background_opacity = if palette.dark { 0.12 } else { 0.08 };
+        // Fixed track width so a slider's changing value text cannot reflow the
+        // surrounding panel row.
+        style.spacing.slider_width = 120.0;
+        style.text_styles = [
+            (TextStyle::Heading, bold_font(TEXT_HEADING)),
+            (TextStyle::Body, FontId::proportional(13.0)),
+            (TextStyle::Button, FontId::proportional(13.0)),
+            (TextStyle::Small, FontId::proportional(TEXT_SMALL)),
+            (TextStyle::Monospace, FontId::monospace(12.5)),
+        ]
+        .into();
+    });
 
-    ctx.set_style(style);
+    // egui defaults to 40 px per wheel line, which feels much slower than
+    // Chrome/GTK (~100 px). Keep egui's smooth wheel easing, but move ~100 px
+    // per notch so sensitivity matches other desktop apps.
+    ctx.options_mut(|options| options.input_options.line_scroll_speed = 100.0);
+}
+
+/// Paint scrollbar handles with the muted scroll color for the duration of one
+/// scroll area. `ScrollStyle` only exposes opacity, not a color, so the handle
+/// color comes from the temporary widget visuals. The previous visuals are
+/// restored immediately, keeping ordinary controls untouched.
+pub fn with_scroll_handle<R>(
+    ui: &mut egui::Ui,
+    palette: Palette,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let old = {
+        let widgets = &ui.style().visuals.widgets;
+        (
+            widgets.inactive.bg_fill,
+            widgets.hovered.bg_fill,
+            widgets.active.bg_fill,
+        )
+    };
+    {
+        let widgets = &mut ui.style_mut().visuals.widgets;
+        widgets.inactive.bg_fill = palette.scroll_handle;
+        widgets.hovered.bg_fill = palette.scroll_handle;
+        widgets.active.bg_fill = palette.scroll_handle;
+    }
+
+    let result = add(ui);
+
+    {
+        let widgets = &mut ui.style_mut().visuals.widgets;
+        widgets.inactive.bg_fill = old.0;
+        widgets.hovered.bg_fill = old.1;
+        widgets.active.bg_fill = old.2;
+    }
+    result
 }

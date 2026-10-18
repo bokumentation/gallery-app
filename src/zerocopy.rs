@@ -8,8 +8,10 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use wgpu::{Device, Queue};
 
-type GetMemoryProperties =
-    unsafe extern "system" fn(ash::vk::PhysicalDevice, *mut ash::vk::PhysicalDeviceMemoryProperties);
+type GetMemoryProperties = unsafe extern "system" fn(
+    ash::vk::PhysicalDevice,
+    *mut ash::vk::PhysicalDeviceMemoryProperties,
+);
 type GetDeviceProcAddr =
     unsafe extern "system" fn(ash::vk::Device, *const std::os::raw::c_char) -> *const c_void;
 type GetMemoryFd = unsafe extern "system" fn(
@@ -49,9 +51,8 @@ impl VulkanFns {
     }
 
     fn memory_fd(&self, device: ash::vk::Device) -> Result<GetMemoryFd, String> {
-        let pointer = unsafe {
-            (self.get_device_proc_addr)(device, b"vkGetMemoryFdKHR\0".as_ptr().cast())
-        };
+        let pointer =
+            unsafe { (self.get_device_proc_addr)(device, b"vkGetMemoryFdKHR\0".as_ptr().cast()) };
         if pointer.is_null() {
             return Err("vkGetMemoryFdKHR is unavailable".to_owned());
         }
@@ -162,8 +163,8 @@ impl ZeroCopyConverter {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("zero-copy-pipeline-layout"),
-            bind_group_layouts: &[&layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("zero-copy-pipeline"),
@@ -213,18 +214,17 @@ impl ZeroCopyConverter {
             .map_err(|error| format!("CUDA sync: {error:?}"))?;
         let decode_time = decode_started.elapsed();
 
-        let hal_buffer = unsafe { wgpu_hal::vulkan::Device::buffer_from_raw(external.vk_buffer) };
+        let hal_buffer = unsafe { wgpu_hal::vulkan::Buffer::from_raw(external.vk_buffer) };
         let wgpu_buffer = unsafe {
-            self.device
-                .create_buffer_from_hal::<wgpu_hal::api::Vulkan>(
-                    hal_buffer,
-                    &wgpu::BufferDescriptor {
-                        label: Some("zero-copy-source"),
-                        size: external.memory_size,
-                        usage: wgpu::BufferUsages::STORAGE,
-                        mapped_at_creation: false,
-                    },
-                )
+            self.device.create_buffer_from_hal::<wgpu_hal::api::Vulkan>(
+                hal_buffer,
+                &wgpu::BufferDescriptor {
+                    label: Some("zero-copy-source"),
+                    size: external.memory_size,
+                    usage: wgpu::BufferUsages::STORAGE,
+                    mapped_at_creation: false,
+                },
+            )
         };
 
         let allocation = ZeroCopyAllocation {
@@ -359,11 +359,13 @@ impl ZeroCopyConverter {
     }
 
     fn create_buffer(&self, size: u64) -> Result<ExternalBuffer, String> {
-        let device = self.device.clone();
         let vulkan = &self.vulkan;
-        let result = unsafe {
-            device.as_hal::<wgpu_hal::api::Vulkan, _, _>(|hal| {
-            let hal = hal?;
+        let hal_device = match unsafe { self.device.as_hal::<wgpu_hal::api::Vulkan>() } {
+            Some(hal_device) => hal_device,
+            None => return Err("wgpu device is not backed by Vulkan".to_owned()),
+        };
+        unsafe {
+            let hal = hal_device;
             let raw = hal.raw_device();
             let physical = hal.raw_physical_device();
             let queue_family = hal.queue_family_index();
@@ -386,7 +388,7 @@ impl ZeroCopyConverter {
                 let buffer = match raw.create_buffer(&info, None) {
                     Ok(buffer) => buffer,
                     Err(error) => {
-                        return Some(Err(format!("vkCreateBuffer: {error:?}")));
+                        return Err(format!("vkCreateBuffer: {error:?}"));
                     }
                 };
                 let requirements = raw.get_buffer_memory_requirements(buffer);
@@ -398,7 +400,7 @@ impl ZeroCopyConverter {
                 });
                 let Some(memory_type) = memory_type else {
                     raw.destroy_buffer(buffer, None);
-                    return Some(Err("no device-local memory type".to_owned()));
+                    return Err("no device-local memory type".to_owned());
                 };
                 let mut export = ash::vk::ExportMemoryAllocateInfo::default()
                     .handle_types(ash::vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD);
@@ -410,20 +412,20 @@ impl ZeroCopyConverter {
                     Ok(memory) => memory,
                     Err(error) => {
                         raw.destroy_buffer(buffer, None);
-                        return Some(Err(format!("vkAllocateMemory: {error:?}")));
+                        return Err(format!("vkAllocateMemory: {error:?}"));
                     }
                 };
                 if let Err(error) = raw.bind_buffer_memory(buffer, memory, 0) {
                     raw.free_memory(memory, None);
                     raw.destroy_buffer(buffer, None);
-                    return Some(Err(format!("vkBindBufferMemory: {error:?}")));
+                    return Err(format!("vkBindBufferMemory: {error:?}"));
                 }
                 let get_fd = match vulkan.memory_fd(raw.handle()) {
                     Ok(get_fd) => get_fd,
                     Err(error) => {
                         raw.free_memory(memory, None);
                         raw.destroy_buffer(buffer, None);
-                        return Some(Err(error));
+                        return Err(error);
                     }
                 };
                 let free_memory = match vulkan.free_memory(raw.handle()) {
@@ -431,7 +433,7 @@ impl ZeroCopyConverter {
                     Err(error) => {
                         raw.free_memory(memory, None);
                         raw.destroy_buffer(buffer, None);
-                        return Some(Err(error));
+                        return Err(error);
                     }
                 };
                 let mut fd = -1;
@@ -441,24 +443,17 @@ impl ZeroCopyConverter {
                 if get_fd(raw.handle(), &fd_info, &mut fd) != ash::vk::Result::SUCCESS {
                     raw.free_memory(memory, None);
                     raw.destroy_buffer(buffer, None);
-                    return Some(Err("vkGetMemoryFdKHR failed".to_owned()));
+                    return Err("vkGetMemoryFdKHR failed".to_owned());
                 }
-                Some(Ok(ExternalBuffer {
+                Ok(ExternalBuffer {
                     vk_buffer: buffer,
                     vk_memory: memory,
                     vk_device: raw.handle(),
                     memory_size: requirements.size,
                     fd,
                     free_memory,
-                }))
+                })
             }
-            })
-        };
-
-        match result {
-            Some(Ok(buffer)) => Ok(buffer),
-            Some(Err(error)) => Err(error),
-            None => Err("wgpu device is not backed by Vulkan".to_owned()),
         }
     }
 }
@@ -491,5 +486,232 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let blue = byte_at(offset + 2u);
     destination[id.y * (params.destination_pitch / 4u) + id.x] =
         red | (green << 8u) | (blue << 16u) | (255u << 24u);
+}
+"#;
+
+/// Box-average downsample of an RGBA texture into a smaller one. Keeps the
+/// persistent viewer texture at the display size the stage needs, so a 24 MP
+/// JPEG occupies a few MB instead of ~92 MB of device memory.
+pub struct Downsampler {
+    device: Device,
+    queue: Queue,
+    pipeline: wgpu::ComputePipeline,
+    layout: wgpu::BindGroupLayout,
+}
+
+impl Downsampler {
+    pub fn new(device: Device, queue: Queue) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("downsample-shader"),
+            source: wgpu::ShaderSource::Wgsl(DOWNSAMPLE_SHADER.into()),
+        });
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("downsample-bind-group-layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("downsample-pipeline-layout"),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("downsample-pipeline"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        Self {
+            device,
+            queue,
+            pipeline,
+            layout,
+        }
+    }
+
+    /// Renders a texture fitting inside `fit` (aspect preserved). Returns an
+    /// error when the source already fits so the caller keeps the original.
+    pub fn run(
+        &self,
+        view: &wgpu::TextureView,
+        source: [u32; 2],
+        fit: [u32; 2],
+    ) -> Result<(wgpu::Texture, wgpu::TextureView, [u32; 2]), String> {
+        let scale = (fit[0] as f32 / source[0] as f32)
+            .min(fit[1] as f32 / source[1] as f32)
+            .min(1.0);
+        if scale >= 1.0 {
+            return Err("no downsample needed".to_owned());
+        }
+        let width = ((source[0] as f32 * scale).floor() as u32).max(1);
+        let height = ((source[1] as f32 * scale).floor() as u32).max(1);
+        let pitch = ((width as usize * 4 + 255) & !255).max(256) as u32;
+
+        let mut params = [0u8; 32];
+        params[0..4].copy_from_slice(&source[0].to_le_bytes());
+        params[4..8].copy_from_slice(&source[1].to_le_bytes());
+        params[8..12].copy_from_slice(&width.to_le_bytes());
+        params[12..16].copy_from_slice(&height.to_le_bytes());
+        params[16..20].copy_from_slice(&pitch.to_le_bytes());
+        let params_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("downsample-params"),
+            size: 32,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&params_buffer, 0, &params);
+
+        let destination = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("downsample-rgba"),
+            size: pitch as u64 * height as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("downsample-bind-group"),
+            layout: &self.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: destination.as_entire_binding(),
+                },
+            ],
+        });
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("downsample-output"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("downsample-encoder"),
+            });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("downsample-pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
+        }
+        encoder.copy_buffer_to_texture(
+            wgpu::TexelCopyBufferInfo {
+                buffer: &destination,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(pitch),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit(Some(encoder.finish()));
+        Ok((texture, texture_view, [width, height]))
+    }
+}
+
+const DOWNSAMPLE_SHADER: &str = r#"
+struct DownParams {
+    src: vec2<u32>,
+    out: vec2<u32>,
+    pitch: u32,
+    pad: u32,
+};
+@group(0) @binding(0) var<uniform> params: DownParams;
+@group(0) @binding(1) var source: texture_2d<f32>;
+@group(0) @binding(2) var<storage, read_write> destination: array<u32>;
+
+@compute @workgroup_size(8, 8)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    if (id.x >= params.out.x || id.y >= params.out.y) {
+        return;
+    }
+    let ratio = vec2<f32>(params.src) / vec2<f32>(params.out);
+    let taps = vec2<u32>(
+        max(1u, u32(floor(ratio.x + 0.5))),
+        max(1u, u32(floor(ratio.y + 0.5))),
+    );
+    let step = ratio / vec2<f32>(taps);
+    let center = (vec2<f32>(id.xy) + vec2<f32>(0.5, 0.5)) * ratio - step * 0.5;
+    var sum = vec4<f32>(0.0);
+    for (var i = 0u; i < taps.x; i = i + 1u) {
+        for (var j = 0u; j < taps.y; j = j + 1u) {
+            let offset = vec2<f32>(f32(i), f32(j)) * step;
+            let coords = clamp(round(center + offset), vec2<f32>(0.0), vec2<f32>(params.src) - vec2<f32>(1.0, 1.0));
+            sum = sum + textureLoad(source, vec2<i32>(coords), 0);
+        }
+    }
+    let average = sum / vec4<f32>(f32(taps.x * taps.y));
+    let rgba = vec4<u32>(
+        u32(round(clamp(average.r, 0.0, 1.0) * 255.0)),
+        u32(round(clamp(average.g, 0.0, 1.0) * 255.0)),
+        u32(round(clamp(average.b, 0.0, 1.0) * 255.0)),
+        u32(round(clamp(average.a, 0.0, 1.0) * 255.0)),
+    );
+    destination[id.y * (params.pitch / 4u) + id.x] =
+        rgba.r | (rgba.g << 8u) | (rgba.b << 16u) | (rgba.a << 24u);
 }
 "#;

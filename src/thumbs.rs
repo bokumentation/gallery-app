@@ -3,7 +3,7 @@ use egui::{Context, TextureHandle, TextureOptions};
 use image::metadata::Orientation;
 use image::{DynamicImage, ImageDecoder};
 use lru::LruCache;
-use std::collections::{HashSet, hash_map::DefaultHasher};
+use std::collections::{hash_map::DefaultHasher, HashSet};
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -55,7 +55,10 @@ impl ThumbnailStore {
                         let (pixels, size) = match load_thumbnail(&request.path, request.max_px) {
                             Ok((pixels, size)) => (Some(pixels), size),
                             Err(err) => {
-                                log::warn!("thumbnail failed for {}: {err}", request.path.display());
+                                log::warn!(
+                                    "thumbnail failed for {}: {err}",
+                                    request.path.display()
+                                );
                                 (None, [0, 0])
                             }
                         };
@@ -87,7 +90,8 @@ impl ThumbnailStore {
     }
 
     pub fn request(&mut self, path: &Path) {
-        if self.cache.contains(path) || self.in_flight.contains(path) || self.failed.contains(path) {
+        if self.cache.contains(path) || self.in_flight.contains(path) || self.failed.contains(path)
+        {
             return;
         }
         let request = ThumbRequest {
@@ -113,10 +117,13 @@ impl ThumbnailStore {
                         image,
                         TextureOptions::LINEAR,
                     );
-                    self.cache.put(result.path, CachedTexture {
-                        texture,
-                        size: result.size,
-                    });
+                    self.cache.put(
+                        result.path,
+                        CachedTexture {
+                            texture,
+                            size: result.size,
+                        },
+                    );
                 }
                 None => {
                     self.failed.insert(result.path);
@@ -130,7 +137,10 @@ fn load_thumbnail(path: &Path, max_px: u32) -> Result<(Vec<u8>, [u32; 2]), Strin
     let cache_path = cache_file_for(path);
     if let Some(cache_path) = &cache_path {
         if let Ok(cached) = image::open(cache_path) {
-            return Ok((cached.to_rgba8().into_raw(), [cached.width(), cached.height()]));
+            return Ok((
+                cached.to_rgba8().into_raw(),
+                [cached.width(), cached.height()],
+            ));
         }
     }
 
@@ -190,14 +200,14 @@ pub fn decode_image(path: &Path) -> Result<DynamicImage, String> {
         .map_err(|err| format!("open: {err}"))?
         .with_guessed_format()
         .map_err(|err| format!("format: {err}"))?;
-    let mut decoder = reader.into_decoder().map_err(|err| format!("decoder: {err}"))?;
+    let mut decoder = reader
+        .into_decoder()
+        .map_err(|err| format!("decoder: {err}"))?;
     let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
-    let mut image =
-        DynamicImage::from_decoder(decoder).map_err(|err| format!("decode: {err}"))?;
+    let mut image = DynamicImage::from_decoder(decoder).map_err(|err| format!("decode: {err}"))?;
     image.apply_orientation(orientation);
     Ok(image)
 }
-
 
 pub fn human_size(bytes: u64) -> String {
     const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];

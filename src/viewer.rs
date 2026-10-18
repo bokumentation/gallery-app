@@ -1,6 +1,6 @@
 use crate::nvjpeg::{is_jpeg, NvJpegDecoder};
 use crate::thumbs::decode_image;
-use crate::zerocopy::{ZeroCopyAllocation, ZeroCopyConverter};
+use crate::zerocopy::{Downsampler, ZeroCopyAllocation, ZeroCopyConverter};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use egui::TextureId;
 use egui_wgpu::RenderState;
@@ -110,7 +110,7 @@ struct LoadResult {
 
 pub struct CachedImage {
     id: TextureId,
-    _view: wgpu::TextureView,
+    view: wgpu::TextureView,
     _texture: wgpu::Texture,
     _zero_copy: Option<ZeroCopyAllocation>,
     pub width: u32,
@@ -122,7 +122,10 @@ pub struct CachedImage {
 impl Drop for CachedImage {
     fn drop(&mut self) {
         if self._zero_copy.is_some() {
-            let _ = self.render_state.device.poll(wgpu::PollType::Wait);
+            let _ = self.render_state.device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            });
         }
         self.render_state.renderer.write().free_texture(&self.id);
     }
@@ -234,6 +237,24 @@ impl ViewerService {
             .map(|(_, image)| image.id)
     }
 
+    /// The cached full-image texture, for callers that need the underlying
+    /// wgpu objects (the grade pass). Mirrors [`ViewerService::texture_id`].
+    pub fn base_texture(
+        &mut self,
+        path: &Path,
+        target: [u32; 2],
+    ) -> Option<(TextureId, wgpu::TextureView, [u32; 2])> {
+        let key = CacheKey::new(path.to_path_buf(), target);
+        if let Some(image) = self.cache.get(&key) {
+            return Some((image.id, image.view.clone(), [image.width, image.height]));
+        }
+        self.cache
+            .iter()
+            .find(|(candidate, image)| {
+                candidate.path == path && image.width >= target[0] && image.height >= target[1]
+            })
+            .map(|(_, image)| (image.id, image.view.clone(), [image.width, image.height]))
+    }
 
     pub fn source_dimensions(&self, path: &Path) -> Option<[u32; 2]> {
         self.dimensions.get(path).copied()
@@ -270,7 +291,7 @@ impl ViewerService {
                     let bytes = uploaded.width as u64 * uploaded.height as u64 * 4;
                     let image = CachedImage {
                         id,
-                        _view: uploaded.view,
+                        view: uploaded.view,
                         _texture: uploaded.texture,
                         _zero_copy: uploaded.zero_copy,
                         width: uploaded.width,
@@ -345,6 +366,7 @@ fn spawn_worker(
                 let started = Instant::now();
                 let result = decode_and_upload(&mut worker, &request.key, &device, &queue);
                 let total = started.elapsed();
+                let result = result.map(|decoded| fit_to_display(&worker, decoded, &request.key));
                 match result {
                     Ok(decoded) => {
                         let _ = result_tx.send(LoadResult {
@@ -380,10 +402,12 @@ struct DecodeWorker {
     nvjpeg: Option<NvJpegDecoder>,
     nvjpeg_ready: bool,
     zero_copy: Option<ZeroCopyConverter>,
+    downsampler: Downsampler,
 }
 
 impl DecodeWorker {
     fn new(device: Device, queue: Queue) -> Self {
+        let downsampler = Downsampler::new(device.clone(), queue.clone());
         let zero_copy = if zero_copy_enabled() {
             match ZeroCopyConverter::new(device, queue) {
                 Ok(converter) => {
@@ -402,6 +426,7 @@ impl DecodeWorker {
             nvjpeg: None,
             nvjpeg_ready: false,
             zero_copy,
+            downsampler,
         };
         worker.ensure_nvjpeg();
         worker
@@ -448,21 +473,21 @@ impl DecodeWorker {
                     Ok(data) => {
                         let started = Instant::now();
                         match decoder.decode_jpeg(&data, target) {
-                        Ok((rgba, [width, height], source)) => {
-                            log::info!(
-                                "nvJPEG {} -> {}x{} (source {}x{}) in {:.1} ms",
-                                path.display(),
-                                width,
-                                height,
-                                source[0],
-                                source[1],
-                                started.elapsed().as_secs_f64() * 1000.0
-                            );
-                            return Ok((rgba, width, height, source));
-                        }
-                        Err(error) => {
-                            log::warn!("nvJPEG decode failed for {}: {error}", path.display());
-                        }
+                            Ok((rgba, [width, height], source)) => {
+                                log::info!(
+                                    "nvJPEG {} -> {}x{} (source {}x{}) in {:.1} ms",
+                                    path.display(),
+                                    width,
+                                    height,
+                                    source[0],
+                                    source[1],
+                                    started.elapsed().as_secs_f64() * 1000.0
+                                );
+                                return Ok((rgba, width, height, source));
+                            }
+                            Err(error) => {
+                                log::warn!("nvJPEG decode failed for {}: {error}", path.display());
+                            }
                         }
                     }
                     Err(error) => log::warn!("read failed for {}: {error}", path.display()),
@@ -474,10 +499,7 @@ impl DecodeWorker {
     }
 }
 
-fn decode_cpu(
-    path: &Path,
-    target: [u32; 2],
-) -> Result<(Vec<u8>, u32, u32, [u32; 2]), String> {
+fn decode_cpu(path: &Path, target: [u32; 2]) -> Result<(Vec<u8>, u32, u32, [u32; 2]), String> {
     let image = decode_image(path)?;
     let source = [image.width(), image.height()];
     let image = image.thumbnail(target[0].max(1), target[1].max(1));
@@ -542,8 +564,7 @@ fn decode_and_upload(
     }
 
     let decode_started = Instant::now();
-    let (rgba, width, height, source) =
-        worker.rgba(&key.path, [key.width, key.height])?;
+    let (rgba, width, height, source) = worker.rgba(&key.path, [key.width, key.height])?;
     let decode = decode_started.elapsed();
 
     let upload_started = Instant::now();
@@ -592,6 +613,39 @@ fn decode_and_upload(
         upload,
         zero_copy: None,
     })
+}
+
+/// Downscales a freshly decoded full-resolution texture to the display size
+/// the stage needs, so a 24 MP JPEG does not keep a 92 MB texture alive in the
+/// viewer cache. Runs on the decode worker right before the result is sent.
+fn fit_to_display(
+    worker: &DecodeWorker,
+    mut decoded: DecodedImage,
+    key: &CacheKey,
+) -> DecodedImage {
+    let fit = [key.width.max(1), key.height.max(1)];
+    match worker
+        .downsampler
+        .run(&decoded.view, [decoded.width, decoded.height], fit)
+    {
+        Ok((texture, view, [width, height])) => {
+            log::info!(
+                "downsample {}x{} fitted to {}x{} ({} px over {} px)",
+                decoded.width,
+                decoded.height,
+                width,
+                height,
+                decoded.width * decoded.height,
+                width * height
+            );
+            decoded.texture = texture;
+            decoded.view = view;
+            decoded.width = width;
+            decoded.height = height;
+            decoded
+        }
+        Err(_) => decoded,
+    }
 }
 
 fn zero_copy_enabled() -> bool {
