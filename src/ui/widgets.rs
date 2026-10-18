@@ -273,3 +273,257 @@ pub fn small_caps(ui: &mut Ui, text: &str, palette: Palette) {
             .color(palette.dim),
     );
 }
+
+// ---------------------------------------------------------------------------
+// Lucide-style icons, drawn as painter geometry (24x24 viewBox mapped to rect)
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+#[allow(dead_code)] // Check/Sun/Moon kept for upcoming panel polish
+pub enum Icon {
+    Menu,
+    RefreshCw,
+    RotateLeft,
+    RotateRight,
+    FlipH,
+    FlipV,
+    Crop,
+    Sliders,
+    Download,
+    Check,
+    Sun,
+    Moon,
+    Info,
+}
+
+/// Ghost icon button (transparent until hovered), shadcn `ghost`/`sm` style.
+pub fn icon_button(ui: &mut Ui, icon: Icon, palette: Palette) -> Response {
+    ghost_icon_button(ui, icon, palette, palette.text)
+}
+
+/// Accent-filled icon button, shadcn `primary`/`sm` style.
+pub fn accent_icon_button(ui: &mut Ui, icon: Icon, palette: Palette, on: bool) -> Response {
+    if on {
+        ghost_icon_button(ui, icon, palette, Color32::WHITE)
+    } else {
+        ghost_icon_button(ui, icon, palette, palette.text)
+    }
+}
+
+fn ghost_icon_button(ui: &mut Ui, icon: Icon, palette: Palette, color: Color32) -> Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(30.0), Sense::click());
+    if response.hovered() || response.is_pointer_button_down_on() {
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(8), palette.card_hover);
+    }
+    let inner = rect.shrink(6.0);
+    paint_icon(ui, icon, inner, color);
+    response
+}
+
+/// Filled arc drawn as a line polyline (degrees 0 = east, positive clockwise
+/// screen space).
+pub fn arc(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    radius: f32,
+    from_deg: f32,
+    to_deg: f32,
+    stroke: Stroke,
+) {
+    let steps = 24;
+    let points: Vec<egui::Pos2> = (0..=steps)
+        .map(|k| {
+            let t = k as f32 / steps as f32;
+            let a_deg = egui::lerp(from_deg..=to_deg, t);
+            let a = a_deg.to_radians();
+            center + egui::vec2(a.cos(), a.sin()) * radius
+        })
+        .collect();
+    painter.add(egui::Shape::line(points, stroke));
+}
+
+pub fn paint_icon(ui: &Ui, icon: Icon, rect: Rect, color: Color32) {
+    let painter = ui.painter();
+    let stroke = Stroke::new(1.6, color);
+    let l = rect.left();
+    let r = rect.right();
+    let t = rect.top();
+    let b = rect.bottom();
+    let m = (l + r) * 0.5;
+    let cy = (t + b) * 0.5;
+
+    match icon {
+        Icon::Menu => {
+            for k in 0..3 {
+                let y = t + rect.height() * (0.18 + 0.32 * k as f32);
+                painter.line_segment([egui::pos2(l, y), egui::pos2(r, y)], stroke);
+            }
+        }
+        Icon::RefreshCw => {
+            // open circular arrows (two half arcs with arrowheads)
+            let radius = rect.width() * 0.38;
+            let center = egui::pos2(m, cy);
+            arc(painter, center, radius, 170.0, 350.0, stroke);
+            arc(painter, center, radius, -10.0, 170.0, stroke);
+            // arrowheads at arc ends
+            painter.line_segment(
+                [egui::pos2(m + radius, cy - radius * 0.5), egui::pos2(m + radius, cy + 1.0)],
+                stroke,
+            );
+        }
+        Icon::RotateLeft | Icon::RotateRight => {
+            let ccw = icon == Icon::RotateLeft;
+            let radius = rect.width() * 0.40;
+            let center = egui::pos2(m, cy - rect.height() * 0.06);
+            let (from, to): (f32, f32) = if ccw {
+                (-170.0, 60.0)
+            } else {
+                (110.0, 340.0)
+            };
+            arc(painter, center, radius, from, to, stroke);
+            // arrowhead at the start of the arc (top edge)
+            let head = egui::pos2(m + if ccw { -radius } else { radius }, cy - rect.height() * 0.30);
+            let dir = if ccw { 0.55 } else { -0.55 };
+            painter.line_segment(
+                [head, head + egui::vec2(-dir * 4.0, -3.4)],
+                stroke,
+            );
+            painter.line_segment([head, head + egui::vec2(dir * 4.0, -3.4)], stroke);
+        }
+        Icon::FlipH => {
+            // mirrored triangles split by vertical edge
+            let inner = 2.0;
+            let bl = egui::pos2(l + inner, b - inner);
+            let tl = egui::pos2(l + inner, t + inner);
+            let mr = egui::pos2(m - 1.0, cy);
+            painter.line_segment([tl, mr], stroke);
+            painter.line_segment([mr, bl], stroke);
+            let br = egui::pos2(r - inner, b - inner);
+            let tr = egui::pos2(r - inner, t + inner);
+            let ml = egui::pos2(m + 1.0, cy);
+            painter.line_segment([tr, ml], stroke);
+            painter.line_segment([ml, br], stroke);
+            painter.line_segment([egui::pos2(m, t + 1.0), egui::pos2(m, b - 1.0)], stroke);
+        }
+        Icon::FlipV => {
+            let inner = 2.0;
+            let tl = egui::pos2(l + inner, t + inner);
+            let tr = egui::pos2(r - inner, t + inner);
+            let mc = egui::pos2(m, (t + inner + cy) * 0.5);
+            painter.line_segment([tl, mc], stroke);
+            painter.line_segment([mc, tr], stroke);
+            let bl = egui::pos2(l + inner, b - inner);
+            let br = egui::pos2(r - inner, b - inner);
+            let mb = egui::pos2(m, (cy + 1.0 + b - inner) * 0.5);
+            painter.line_segment([bl, mb], stroke);
+            painter.line_segment([mb, br], stroke);
+            painter.line_segment([egui::pos2(l + 1.0, cy), egui::pos2(r - 1.0, cy)], stroke);
+        }
+        Icon::Crop => {
+            // M6 2 V16 a2 2 0 0 0 2 2 H22  +  M22 8 V8H8 a2 2 0 0 0 -2 2 V22 ... simplified lucide crop
+            let x0 = l + rect.width() * 0.28;
+            let y0 = t + rect.height() * 0.28;
+            let x1 = r - rect.width() * 0.24;
+            let y1 = b - rect.height() * 0.24;
+            painter
+                .line_segment([egui::pos2(x0, t + 2.0), egui::pos2(x0, y1 - 4.0)], stroke);
+            arc(painter, egui::pos2(x0 + 4.0, y1 - 4.0), 4.0, 90.0, 180.0, stroke);
+            painter.line_segment([egui::pos2(x0 + 4.0, y1), egui::pos2(r - 2.0, y1)], stroke);
+            painter.line_segment([egui::pos2(r - 2.0, y1 - 6.0), egui::pos2(r - 2.0, y1)], stroke);
+            painter.line_segment(
+                [egui::pos2(x1, b - 2.0), egui::pos2(x1, y0)],
+                stroke,
+            );
+            arc(painter, egui::pos2(x1 - 4.0, y0), 4.0, 270.0, 360.0, stroke);
+            painter.line_segment([egui::pos2(x1 - 4.0, y0 - 4.0), egui::pos2(l + 2.0, y0 - 4.0)], stroke);
+            painter.line_segment([egui::pos2(l + 2.0, y0 - 4.0), egui::pos2(l + 2.0, y0 + 2.0)], stroke);
+        }
+        Icon::Sliders => {
+            // three horizontal lines with knobs at staggered heights
+            for k in 0..3 {
+                let y = t + rect.height() * (0.14 + 0.36 * k as f32);
+                let knob_x = match k {
+                    0 => l + rect.width() * 0.62,
+                    1 => l + rect.width() * 0.30,
+                    _ => l + rect.width() * 0.72,
+                };
+                painter.line_segment(
+                    [egui::pos2(l, y), egui::pos2(r, y)],
+                    stroke,
+                );
+                painter.circle_filled(egui::pos2(knob_x, y), 2.4, color);
+            }
+        }
+        Icon::Download => {
+            let top = t + rect.height() * 0.20;
+            let bottom = b - rect.height() * 0.32;
+            painter.line_segment([egui::pos2(m, top), egui::pos2(m, bottom)], stroke);
+            painter.line_segment(
+                [egui::pos2(m - 3.6, bottom - 4.0), egui::pos2(m, bottom)],
+                stroke,
+            );
+            painter.line_segment(
+                [egui::pos2(m + 3.6, bottom - 4.0), egui::pos2(m, bottom)],
+                stroke,
+            );
+            painter.line_segment([egui::pos2(l, b - 3.0), egui::pos2(l, b)], stroke);
+            painter.line_segment([egui::pos2(l, b), egui::pos2(r, b)], stroke);
+            painter.line_segment([egui::pos2(r, b), egui::pos2(r, b - 3.0)], stroke);
+        }
+        Icon::Check => {
+            painter.line_segment(
+                [
+                    egui::pos2(l + rect.width() * 0.15, cy + 0.5),
+                    egui::pos2(l + rect.width() * 0.42, b - rect.height() * 0.18),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(l + rect.width() * 0.42, b - rect.height() * 0.18),
+                    egui::pos2(r - rect.width() * 0.12, t + rect.height() * 0.18),
+                ],
+                stroke,
+            );
+        }
+        Icon::Sun => {
+            let radius = rect.width() * 0.26;
+            painter.circle_stroke(egui::pos2(m, cy), radius, stroke);
+            for k in 0..8 {
+                let ang = k as f32 * std::f32::consts::TAU / 8.0;
+                let dir = egui::vec2(ang.cos(), ang.sin());
+                painter.line_segment(
+                    [
+                        egui::pos2(m, cy) + dir * (radius + 1.5),
+                        egui::pos2(m, cy) + dir * (radius + 4.5),
+                    ],
+                    stroke,
+                );
+            }
+        }
+        Icon::Moon => {
+            let radius = rect.width() * 0.67;
+            let center = egui::pos2(m, cy);
+            // crescent: big arc + cut-back arc
+            arc(painter, center, radius, -138.0, 138.0, stroke);
+            arc(
+                painter,
+                center + egui::vec2(radius * 0.55, 0.0),
+                radius * 0.78,
+                115.0,
+                245.0,
+                stroke,
+            );
+        }
+        Icon::Info => {
+            let radius = rect.width() * 0.42;
+            painter.circle_stroke(egui::pos2(m, cy), radius, stroke);
+            painter.circle_filled(egui::pos2(m, t + rect.height() * 0.34), 1.4, color);
+            painter.line_segment(
+                [egui::pos2(m, cy + 0.5), egui::pos2(m, b - rect.height() * 0.24)],
+                stroke,
+            );
+        }
+    }
+}

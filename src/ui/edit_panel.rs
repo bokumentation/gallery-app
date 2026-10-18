@@ -141,7 +141,8 @@ fn crop_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
             });
 
             ui.horizontal(|ui| {
-                if w::flat_button(ui, "↻", palette)
+                use w::Icon;
+                if w::icon_button(ui, Icon::RotateRight, palette)
                     .on_hover_text("Rotate 90 degrees")
                     .clicked()
                 {
@@ -150,7 +151,7 @@ fn crop_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
                     state.orientation_steps = (state.orientation_steps + 1) % 4;
                     state.crop = None;
                 }
-                if w::flat_button(ui, "⟲", palette)
+                if w::icon_button(ui, Icon::RotateLeft, palette)
                     .on_hover_text("Rotate back 90 degrees")
                     .clicked()
                 {
@@ -159,7 +160,7 @@ fn crop_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
                     state.orientation_steps = (state.orientation_steps + 3) % 4;
                     state.crop = None;
                 }
-                if w::flat_button(ui, "⇄", palette)
+                if w::icon_button(ui, Icon::FlipH, palette)
                     .on_hover_text("Flip horizontally")
                     .clicked()
                 {
@@ -168,7 +169,7 @@ fn crop_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
                     state.flip_h = !state.flip_h;
                     state.crop = None;
                 }
-                if w::flat_button(ui, "⇅", palette)
+                if w::icon_button(ui, Icon::FlipV, palette)
                     .on_hover_text("Flip vertically")
                     .clicked()
                 {

@@ -552,6 +552,7 @@ impl GalleryApp {
     }
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
+        use w::Icon;
         let palette = self.palette;
         egui::Panel::top("top_bar")
             .exact_size(52.0)
@@ -562,7 +563,7 @@ impl GalleryApp {
             )
             .show(ui, |ui| {
                 ui.horizontal_centered(|ui| {
-                    if w::symbol_button(ui, "☰", palette)
+                    if w::icon_button(ui, Icon::Menu, palette)
                         .on_hover_text("Toggle sidebar")
                         .clicked()
                     {
@@ -573,7 +574,7 @@ impl GalleryApp {
                         ui.allocate_exact_size(Vec2::splat(26.0), Sense::hover());
                     ui.painter()
                         .rect_filled(icon_rect, CornerRadius::same(7), palette.accent);
-                    w::paint_image_icon(ui, icon_rect.shrink(6.0), palette.on_accent);
+                    w::paint_icon(ui, w::Icon::Info, icon_rect.shrink(6.0), palette.on_accent);
 
                     ui.label(
                         RichText::new("Gallery")
@@ -581,22 +582,60 @@ impl GalleryApp {
                             .color(palette.text),
                     );
 
-                    ui.add_space(10.0);
+                    ui.add_space(6.0);
                     if w::flat_button(ui, "Open Folder", palette).clicked() {
                         self.pick_folder();
                     }
-                    if self.viewer_open
-                        && w::flat_button(ui, "Adjust", palette)
-                            .on_hover_text("Crop and color grade (E)")
+
+                    // Editor controls (RapidRAW-style), only with an open image.
+                    if self.viewer_open {
+                        ui.add_space(12.0);
+                        if w::icon_button(ui, Icon::RotateRight, palette)
+                            .on_hover_text("Rotate 90 degrees")
                             .clicked()
-                    {
-                        self.toggle_edit_panel();
-                    }
-                    if w::symbol_button(ui, "⟳", palette)
-                        .on_hover_text("Refresh")
-                        .clicked()
-                    {
-                        self.rescan();
+                        {
+                            self.orientation_step(1);
+                        }
+                        if w::icon_button(ui, Icon::RotateLeft, palette)
+                            .on_hover_text("Rotate back 90 degrees")
+                            .clicked()
+                        {
+                            self.orientation_step(3);
+                        }
+                        if w::icon_button(ui, Icon::FlipV, palette)
+                            .on_hover_text("Flip vertically")
+                            .clicked()
+                        {
+                            self.flip(true);
+                        }
+                        if w::icon_button(ui, Icon::FlipH, palette)
+                            .on_hover_text("Flip horizontally")
+                            .clicked()
+                        {
+                            self.flip(false);
+                        }
+                        if w::icon_button(ui, Icon::Crop, palette)
+                            .on_hover_text("Crop (E)")
+                            .clicked()
+                        {
+                            if !self.edit_panel_open {
+                                self.edit_panel_open = true;
+                                self.crop_drag = None;
+                                self.crop_active = true;
+                            } else if self.crop_active {
+                                self.crop_drag = None;
+                                self.crop_active = false;
+                            } else {
+                                self.crop_drag = None;
+                                self.crop_active = true;
+                            }
+                        }
+                        if w::icon_button(ui, Icon::Sliders, palette)
+                            .on_hover_text("Adjust panel (E)")
+                            .clicked()
+                        {
+                            self.toggle_edit_panel();
+                        }
                     }
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -609,7 +648,20 @@ impl GalleryApp {
                             self.palette = Palette::from_mode(self.theme_mode);
                             theme::apply(ui.ctx(), self.palette);
                         }
-                        ui.add_space(4.0);
+                        if self.viewer_open
+                            && w::accent_icon_button(ui, Icon::Download, palette, false)
+                                .on_hover_text("Export (planned: GPU nvJPEG)")
+                                .clicked()
+                        {
+                            self.begin_export();
+                        }
+                        ui.add_space(10.0);
+                        if w::icon_button(ui, Icon::RefreshCw, palette)
+                            .on_hover_text("Refresh")
+                            .clicked()
+                        {
+                            self.rescan();
+                        }
                     });
                 });
             });
@@ -618,6 +670,81 @@ impl GalleryApp {
             .exact_size(1.0)
             .frame(Frame::new().fill(palette.border))
             .show(ui, |_| {});
+    }
+
+    fn orientation_step(&mut self, delta: u32) {
+        let Some(path) = self.current_viewer_path() else {
+            return;
+        };
+        self.crop_drag = None;
+        let state = self.edits.entry(path).or_default();
+        state.orientation_steps = (state.orientation_steps + delta) % 4;
+        state.crop = None;
+    }
+
+    fn flip(&mut self, vertical: bool) {
+        let Some(path) = self.current_viewer_path() else {
+            return;
+        };
+        self.crop_drag = None;
+        let state = self.edits.entry(path).or_default();
+        if vertical {
+            state.flip_v = !state.flip_v;
+        } else {
+            state.flip_h = !state.flip_h;
+        }
+        state.crop = None;
+    }
+
+    fn begin_export(&mut self) {
+        // Phase 6: GPU nvJPEG export pipeline. The sidecar/settings UI lands there.
+        log::info!("export requested (pending Phase 6 hook)");
+    }
+
+    fn bottom_info_bar(&mut self, ui: &mut egui::Ui) {
+        if !self.viewer_open {
+            return;
+        }
+        let palette = self.palette;
+        egui::Panel::bottom("info_bar")
+            .exact_size(32.0)
+            .frame(
+                Frame::new()
+                    .fill(palette.header)
+                    .inner_margin(Margin::symmetric(12, 2)),
+            )
+            .show(ui, |ui| {
+                ui.horizontal_centered(|ui| {
+                    if let Some(item_index) = self.visible.get(self.viewer_index) {
+                        let item = self.all_items[*item_index].clone();
+                        ui.label(
+                            RichText::new(&item.name)
+                                .font(theme::bold_font(12.0))
+                                .color(palette.text),
+                        );
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            let dims = self
+                                .viewer
+                                .source_dimensions(&item.path)
+                                .unwrap_or([0, 0]);
+                            let kb = item.size as f64 / 1024.0;
+                            let size_text = if kb > 1024.0 {
+                                format!("{:.1} MB", kb / 1024.0)
+                            } else {
+                                format!("{:.0} KB", kb)
+                            };
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} × {}  ·  {}",
+                                    dims[0], dims[1], size_text
+                                ))
+                                .size(12.0)
+                                .color(palette.dim),
+                            );
+                        });
+                    }
+                });
+            });
     }
 
     fn sidebar(&mut self, ui: &mut egui::Ui) {
@@ -1267,6 +1394,7 @@ impl eframe::App for GalleryApp {
         if self.viewer_open && self.edit_panel_open {
             crate::ui::edit_panel::show(self, ui);
         }
+        self.bottom_info_bar(ui);
         self.central(ui);
         self.sync_filters();
         self.toast(&ctx);
