@@ -1,8 +1,11 @@
 # Gallery
 
-A fast, GNOME-style image gallery built with Rust, egui, and wgpu/Vulkan.
+A fast, GNOME-style image gallery and editor built with Rust, egui 0.37, and
+wgpu/Vulkan.
 
 ## Features
+
+Browse:
 
 - GNOME/Adwaita-inspired light and dark themes, following the system color scheme on startup
 - Folder tree in the sidebar with lazy expansion, plus Home / Pictures / Downloads / Desktop shortcuts
@@ -20,6 +23,29 @@ A fast, GNOME-style image gallery built with Rust, egui, and wgpu/Vulkan.
 - Background thumbnail workers, an in-memory LRU texture cache, and a persistent JPEG thumbnail cache
 - EXIF orientation is applied when decoding
 
+Edit (right-side adjust panel, RapidRAW-style layout):
+
+- Top toolbar with rotate ⟲/⟳ 90° steps, flip H/V, crop toggle, adjust toggle,
+  and an accent Export button (export itself is Phase 6); bottom bar with
+  filename, dimensions and file size
+- Crop tool: on-image overlay (dim outside, rule-of-thirds grid, corner grips,
+  drag), aspect presets, free straightening, crop semantics handled in GPU
+  geometry (shader.wgsl), Escape exits crop first
+- Color grading in a single WGSL pass shared by preview and export: sRGB →
+  linear, exposure, white balance (temperature + tint via Robertson +
+  Bradford), contrast/highlights/shadows/whites/blacks, hue, saturation,
+  vibrance, brightness with filmic-style mapping
+- Core sliders: exposure, brightness, contrast, highlights, shadows, whites,
+  blacks, saturation, vibrance, hue, temperature, tint — batched as one 160 B
+  uniform per frame on the GPU
+- Per-image edits keyed on (path, base image, edit state); switching images
+  keeps its own grade
+- 3D LUT support: import `.cube` luts via a file dialog; they persist in
+  `~/.cache/rust-gallery/luts` across launches, trilinear-sampled in the
+  shader; the LUT section is the first section in the panel
+- Shadcn-aesthetic widgets: ghost/primary icon buttons with Lucide-style
+  painted icons, switches, sliders, combobox
+
 Supported formats: JPEG, PNG, WebP, GIF (first frame), BMP, TIFF.
 
 ## Build and run
@@ -29,8 +55,10 @@ cargo run --release
 cargo run --release -- /path/to/photos
 ```
 
-Requires Rust 1.85+ and a working Vulkan driver. The folder picker uses the
-desktop portal, which is available by default on GNOME.
+Requires Rust 1.96+ (a `rust-toolchain.toml` pins this project to a recent
+stable; the system default toolchain is untouched) and a working Vulkan
+driver. The folder picker uses the desktop portal, which is available by
+default on GNOME.
 
 For CUDA/nvJPEG acceleration, an NVIDIA driver and the nvJPEG runtime are
 needed. Install it system-wide:
@@ -74,17 +102,26 @@ context in a worker thread at app startup, so it does not block the UI.
 | `←` `→` `↑` `↓` | Move grid selection; navigate in the viewer |
 | `Home` / `End` | First / last image |
 | `Enter` | Open the selected image |
+| `E` | Toggle the adjust panel |
+| `Esc` | Leave crop mode first, then leave the viewer |
 
 ## Design
 
-- `src/theme.rs` — Adwaita light/dark palettes, system theme detection, font setup
-- `src/app.rs` — application state, layout, grid/viewer, keyboard handling
+- `src/theme.rs` — Adwaita light/dark palettes, system theme detection, bundled Inter fonts, ppi snapping
+- `src/app.rs` — application state, layout, grid/viewer, keyboard handling, toolbar
+- `src/ui/edit_panel.rs` — right adjust panel (LUT / crop / grading sections), crop overlay
+- `src/ui/widgets.rs` — shadcn-aesthetic buttons/icons, switch, segmented control, search field
+- `src/grade/mod.rs` — `EditState` (crop/aspect/orientation/adjustments/LUT)
+- `src/grade/gpu.rs` — GradePass: WGSL grading compute pipeline, uniforms, LUT texture registry
+- `src/grade/shader.wgsl` — color pipeline + LSB/geometry, ported math from RapidRAW
+- `src/grade/wb.rs` — Robertson white balance f64 math (Bradford chromatic adaptation)
+- `src/crop.rs` — crop-rectangle math and straighten solve
+- `src/luts.rs` — `.cube` parser, persistent LUT store, 3D texture upload
 - `src/scan.rs` — background directory scanning
 - `src/thumbs.rs` — thumbnail workers, disk cache, CPU image decoding
 - `src/viewer.rs` — full-image decode workers, prefetching, LRU cache, GPU uploads
 - `src/nvjpeg.rs` — dynamically loaded nvJPEG bindings and CUDA decoding
 - `src/zerocopy.rs` — CUDA-imported Vulkan buffers and the RGB → RGBA compute pass
-- `src/ui/widgets.rs` — GNOME-style buttons, switch, segmented control, search field
 
 Rendering is GPU-accelerated through `eframe`'s wgpu renderer. It prefers Vulkan
 on the discrete GPU and falls back to OpenGL only if Vulkan is unavailable.
@@ -102,12 +139,10 @@ display texture. No image pixels cross PCIe or the CPU after decoding.
 
 ## Roadmap
 
-- Right-side edit panel: cropping (aspect presets, straightening, rotate/flip) and color grading
-  (exposure, contrast, highlights/shadows/whites/blacks, temperature/tint, saturation/vibrance/hue,
-  HSL color mixer, split toning) with a live GPU preview through a WGSL compute pass
+- HSL color mixer (8 color ranges) and 4-wheel split toning in the grade shader
 - Export with a GPU-resident pipeline: full-resolution decode → WGSL geometry + grade →
   nvJPEG GPU encode from device memory (JPEG never crosses to the host), plus a per-image
-  sidecar JSON storing the edit recipe
+  sidecar JSON storing the edit recipe (Export button wiring lands here)
 - Full-resolution display textures: dedicated 100% viewing
 - Thumbnail cache size limit and cleanup
 - Remember last folder, window size, and theme between launches
