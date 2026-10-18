@@ -1,0 +1,46 @@
+[package]
+name = "gallery-app"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+resolver = "3"
+
+[dependencies]
+eframe = { version = "0.32.3", default-features = false, features = [
+    "wgpu",
+    "default_fonts",
+    "x11",
+    "wayland",
+    "accesskit",
+] }
+egui = "0.32.3"
+egui-wgpu = "0.32.3"
+wgpu = "25.0.2"
+image = { version = "=0.25.9", default-features = false, features = [
+    "jpeg",
+    "png",
+    "webp",
+    "gif",
+    "bmp",
+    "tiff",
+] }
+walkdir = "2"
+crossbeam-channel = "0.5"
+lru = "0.12"
+rfd = "0.15.4"
+dirs = "6"
+log = "0.4"
+env_logger = "0.11"
+cudarc = { version = "0.17.5", default-features = false, features = ["driver", "runtime", "dynamic-loading", "cuda-13000"] }
+libloading = "0.8.9"
+wgpu-hal = { version = "25.0.2", features = ["vulkan"] }
+ash = "0.38"
+
+[profile.dev]
+opt-level = 2
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
