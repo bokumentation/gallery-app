@@ -4,6 +4,8 @@ use crate::scan::{spawn_scan, ScanOutcome};
 use crate::theme::{self, Palette, ThemeMode};
 use crate::thumbs::{human_size, ThumbnailStore};
 use crate::viewer::ViewerService;
+use crate::ui::actions::{ActionId, ActionSpec, ButtonStyle, Visibility};
+use crate::ui::layout::RightTab;
 use crate::ui::widgets as w;
 use crossbeam_channel::Receiver;
 use egui::{
@@ -14,8 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-const GRID_GAP: f32 = 12.0;
-const GRID_PAD: f32 = 18.0;
+const TOP_BAR_HEIGHT: f32 = 52.0;
 
 pub struct GalleryApp {
     pub(crate) theme_mode: ThemeMode,
@@ -45,6 +46,7 @@ pub struct GalleryApp {
     pub(crate) thumbs: ThumbnailStore,
     pub(crate) viewer: ViewerService,
     pub(crate) edit_panel_open: bool,
+    pub(crate) right_tab: RightTab,
     pub(crate) crop_active: bool,
     pub(crate) crop_drag: Option<crate::crop::CropDrag>,
     pub(crate) lut_names: Vec<String>,
@@ -181,6 +183,7 @@ impl GalleryApp {
                     .expect("wgpu render state is available with the wgpu renderer"),
             ),
             edit_panel_open: false,
+            right_tab: RightTab::Edit,
             crop_active: false,
             crop_drag: None,
             lut_names: Vec::new(),
@@ -423,6 +426,14 @@ impl GalleryApp {
             .map(|item| item.path.clone())
     }
 
+    /// The image currently shown in the viewer.
+    pub(crate) fn current_item(&self) -> Option<ImageItem> {
+        self.visible
+            .get(self.viewer_index)
+            .and_then(|index| self.all_items.get(*index))
+            .cloned()
+    }
+
     fn step_viewer(&mut self, delta: isize) {
         if self.visible.is_empty() {
             return;
@@ -442,7 +453,7 @@ impl GalleryApp {
         self.scroll_to_selection = true;
     }
 
-    fn show_toast(&mut self, message: String, error: bool) {
+    pub(crate) fn show_toast(&mut self, message: String, error: bool) {
         self.toast = Some(Toast {
             message,
             error,
@@ -545,18 +556,82 @@ impl GalleryApp {
     }
 
     fn toggle_edit_panel(&mut self) {
-        self.edit_panel_open = !self.edit_panel_open;
-        if !self.edit_panel_open {
+        if self.edit_panel_open {
+            self.edit_panel_open = false;
             self.crop_active = false;
             self.crop_drag = None;
+        } else {
+            self.edit_panel_open = true;
+            self.right_tab = RightTab::Edit;
         }
+    }
+
+    /// Open the right panel on `tab`; if it is already showing that tab, close
+    /// the panel. Switching away from Edit leaves crop mode.
+    fn toggle_right_tab(&mut self, tab: RightTab) {
+        if self.edit_panel_open && self.right_tab == tab {
+            self.edit_panel_open = false;
+            self.crop_active = false;
+            self.crop_drag = None;
+        } else {
+            self.edit_panel_open = true;
+            self.right_tab = tab;
+            if tab != RightTab::Edit {
+                self.crop_active = false;
+                self.crop_drag = None;
+            }
+        }
+    }
+
+    fn action_active(&self, id: ActionId) -> bool {
+        match id {
+            ActionId::Sliders => self.edit_panel_open && self.right_tab == RightTab::Edit,
+            ActionId::Info => self.edit_panel_open && self.right_tab == RightTab::Info,
+            ActionId::Crop => self.crop_active,
+            _ => false,
+        }
+    }
+
+    fn copy_current_path(&mut self, ctx: &egui::Context) {
+        let Some(path) = self.current_viewer_path() else {
+            return;
+        };
+        ctx.copy_text(path.display().to_string());
+        self.show_toast("Image path copied".to_owned(), false);
+    }
+
+    /// Reveal the current image in the desktop file manager. `gio open` honours
+    /// the user's default handler; `xdg-open` is the portable fallback.
+    fn reveal_in_file_manager(&mut self) {
+        let Some(path) = self.current_viewer_path() else {
+            return;
+        };
+        let dir = path
+            .parent()
+            .map(|parent| parent.to_path_buf())
+            .unwrap_or_else(|| path.clone());
+        let mut last_error = None;
+        for program in ["gio", "xdg-open"] {
+            let mut command = std::process::Command::new(program);
+            command.arg(&dir);
+            match command.spawn() {
+                Ok(_) => {
+                    log::info!("opened {} with {program}", dir.display());
+                    return;
+                }
+                Err(error) => last_error = Some(format!("{program}: {error}")),
+            }
+        }
+        let detail = last_error.unwrap_or_else(|| "no file manager command".to_owned());
+        self.show_toast(format!("Could not open file manager ({detail})"), true);
     }
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         use w::Icon;
         let palette = self.palette;
+        let metrics = palette.metrics;
         egui::Panel::top("top_bar")
-            .exact_size(52.0)
+            .exact_size(TOP_BAR_HEIGHT)
             .frame(
                 Frame::new()
                     .fill(palette.header)
@@ -573,9 +648,12 @@ impl GalleryApp {
 
                     let (icon_rect, _) =
                         ui.allocate_exact_size(Vec2::splat(26.0), Sense::hover());
-                    ui.painter()
-                        .rect_filled(icon_rect, CornerRadius::same(7), palette.accent);
-                    w::paint_icon(ui, w::Icon::Info, icon_rect.shrink(6.0), palette.on_accent);
+                    ui.painter().rect_filled(
+                        icon_rect,
+                        CornerRadius::same(metrics.radius_sm),
+                        palette.accent,
+                    );
+                    w::paint_icon(ui, Icon::Image, icon_rect.shrink(5.0), palette.on_accent);
 
                     ui.label(
                         RichText::new("Gallery")
@@ -583,85 +661,24 @@ impl GalleryApp {
                             .color(palette.text),
                     );
 
-                    ui.add_space(6.0);
-                    if w::flat_button(ui, "Open Folder", palette).clicked() {
-                        self.pick_folder();
+                    ui.add_space(metrics.space_xs);
+                    for spec in crate::ui::actions::LEFT_ACTIONS {
+                        self.render_action(ui, spec, palette);
                     }
 
-                    // Editor controls (RapidRAW-style), only with an open image.
+                    // Image tools, only with an open image.
                     if self.viewer_open {
-                        ui.add_space(12.0);
-                        if w::icon_button(ui, Icon::RotateRight, palette)
-                            .on_hover_text("Rotate 90 degrees")
-                            .clicked()
-                        {
-                            self.orientation_step(1);
-                        }
-                        if w::icon_button(ui, Icon::RotateLeft, palette)
-                            .on_hover_text("Rotate back 90 degrees")
-                            .clicked()
-                        {
-                            self.orientation_step(3);
-                        }
-                        if w::icon_button(ui, Icon::FlipV, palette)
-                            .on_hover_text("Flip vertically")
-                            .clicked()
-                        {
-                            self.flip(true);
-                        }
-                        if w::icon_button(ui, Icon::FlipH, palette)
-                            .on_hover_text("Flip horizontally")
-                            .clicked()
-                        {
-                            self.flip(false);
-                        }
-                        if w::icon_button(ui, Icon::Crop, palette)
-                            .on_hover_text("Crop (E)")
-                            .clicked()
-                        {
-                            if !self.edit_panel_open {
-                                self.edit_panel_open = true;
-                                self.crop_drag = None;
-                                self.crop_active = true;
-                            } else if self.crop_active {
-                                self.crop_drag = None;
-                                self.crop_active = false;
-                            } else {
-                                self.crop_drag = None;
-                                self.crop_active = true;
-                            }
-                        }
-                        if w::icon_button(ui, Icon::Sliders, palette)
-                            .on_hover_text("Adjust panel (E)")
-                            .clicked()
-                        {
-                            self.toggle_edit_panel();
+                        ui.add_space(metrics.space_sm);
+                        ui.separator();
+                        ui.add_space(metrics.space_xs);
+                        for spec in crate::ui::actions::MIDDLE_ACTIONS {
+                            self.render_action(ui, spec, palette);
                         }
                     }
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let mode = self.theme_mode;
-                        if w::flat_button(ui, mode.label(), palette)
-                            .on_hover_text("Theme: Auto, Light, Dark")
-                            .clicked()
-                        {
-                            self.theme_mode = self.theme_mode.next();
-                            self.palette = Palette::from_mode(self.theme_mode);
-                            theme::apply(ui.ctx(), self.palette);
-                        }
-                        if self.viewer_open
-                            && w::accent_icon_button(ui, Icon::Download, palette)
-                                .on_hover_text("Export the edited image")
-                                .clicked()
-                        {
-                            self.begin_export();
-                        }
-                        ui.add_space(10.0);
-                        if w::icon_button(ui, Icon::RefreshCw, palette)
-                            .on_hover_text("Refresh")
-                            .clicked()
-                        {
-                            self.rescan();
+                        for spec in crate::ui::actions::RIGHT_ACTIONS.iter().rev() {
+                            self.render_action(ui, spec, palette);
                         }
                     });
                 });
@@ -671,6 +688,78 @@ impl GalleryApp {
             .exact_size(1.0)
             .frame(Frame::new().fill(palette.border))
             .show(ui, |_| {});
+    }
+
+    /// Render one top-bar action and dispatch it on click. The action lists
+    /// live in `ui/actions.rs`, so moving or restyling a button is a data edit.
+    fn render_action(&mut self, ui: &mut egui::Ui, spec: &ActionSpec, palette: Palette) {
+        if spec.visible == Visibility::ViewerOpen && !self.viewer_open {
+            return;
+        }
+        let active = self.action_active(spec.id);
+        let is_toggle = matches!(
+            spec.id,
+            ActionId::Sliders | ActionId::Info | ActionId::Crop
+        );
+        let response = match spec.style {
+            ButtonStyle::Primary => match spec.icon {
+                Some(icon) => w::accent_icon_button(ui, icon, palette),
+                None => w::accent_button(ui, spec.label, palette),
+            },
+            ButtonStyle::Ghost => match spec.icon {
+                Some(icon) if is_toggle => w::toggle_icon_button(ui, icon, active, palette),
+                Some(icon) => w::icon_button(ui, icon, palette),
+                None => w::flat_button(ui, spec.label, palette),
+            },
+            ButtonStyle::Text => {
+                let label = if spec.id == ActionId::Theme {
+                    self.theme_mode.label()
+                } else {
+                    spec.label
+                };
+                w::flat_button(ui, label, palette)
+            }
+        };
+        let response = response.on_hover_text(spec.label);
+        if response.clicked() {
+            let ctx = ui.ctx().clone();
+            self.dispatch_action(spec.id, &ctx);
+        }
+    }
+
+    fn dispatch_action(&mut self, id: ActionId, ctx: &egui::Context) {
+        match id {
+            ActionId::OpenFolder => self.pick_folder(),
+            ActionId::RotateLeft => self.orientation_step(3),
+            ActionId::RotateRight => self.orientation_step(1),
+            ActionId::FlipV => self.flip(true),
+            ActionId::FlipH => self.flip(false),
+            ActionId::Crop => {
+                if !self.edit_panel_open || self.right_tab != RightTab::Edit {
+                    self.edit_panel_open = true;
+                    self.right_tab = RightTab::Edit;
+                    self.crop_drag = None;
+                    self.crop_active = true;
+                } else if self.crop_active {
+                    self.crop_drag = None;
+                    self.crop_active = false;
+                } else {
+                    self.crop_drag = None;
+                    self.crop_active = true;
+                }
+            }
+            ActionId::Sliders => self.toggle_right_tab(RightTab::Edit),
+            ActionId::CopyPath => self.copy_current_path(ctx),
+            ActionId::Info => self.toggle_right_tab(RightTab::Info),
+            ActionId::Reveal => self.reveal_in_file_manager(),
+            ActionId::Export => self.begin_export(),
+            ActionId::Theme => {
+                self.theme_mode = self.theme_mode.next();
+                self.palette = Palette::from_mode(self.theme_mode);
+                theme::apply(ctx, self.palette);
+            }
+            ActionId::Refresh => self.rescan(),
+        }
     }
 
     fn orientation_step(&mut self, delta: u32) {
@@ -750,7 +839,7 @@ impl GalleryApp {
         }
         let palette = self.palette;
         egui::Panel::bottom("info_bar")
-            .exact_size(32.0)
+            .exact_size(palette.metrics.bottom_bar_h)
             .frame(
                 Frame::new()
                     .fill(palette.header)
@@ -794,7 +883,7 @@ impl GalleryApp {
         let palette = self.palette;
         egui::Panel::left("sidebar")
             .resizable(true)
-            .default_size(252.0)
+            .default_size(palette.metrics.sidebar_w)
             .size_range(190.0..=390.0)
             .frame(
                 Frame::new()
@@ -1025,6 +1114,7 @@ impl GalleryApp {
 
     fn grid_ui(&mut self, ui: &mut Ui) {
         let palette = self.palette;
+        let metrics = palette.metrics;
         let count = self.visible.len();
 
         if count == 0 {
@@ -1034,14 +1124,17 @@ impl GalleryApp {
 
         let width = ui.available_width();
         let cell = self.thumb_size.px();
-        let columns = (((width - GRID_PAD * 2.0 + GRID_GAP) / (cell + GRID_GAP)).floor() as usize)
+        let columns = (((width - metrics.grid_pad * 2.0 + metrics.grid_gap)
+            / (cell + metrics.grid_gap))
+            .floor() as usize)
             .max(1);
         self.grid_columns = columns;
 
-        let cell_width =
-            (width - GRID_PAD * 2.0 - GRID_GAP * (columns.saturating_sub(1)) as f32)
-                / columns as f32;
-        let row_stride = cell_width + GRID_GAP;
+        let cell_width = (width
+            - metrics.grid_pad * 2.0
+            - metrics.grid_gap * (columns.saturating_sub(1)) as f32)
+            / columns as f32;
+        let row_stride = cell_width + metrics.grid_gap;
         let rows = count.div_ceil(columns);
 
         let mut open_request = None;
@@ -1067,7 +1160,9 @@ impl GalleryApp {
                         let path = item.path.clone();
                         let name = item.name.clone();
 
-                        let left = base.left() + GRID_PAD + column as f32 * (cell_width + GRID_GAP);
+                        let left = base.left()
+                            + metrics.grid_pad
+                            + column as f32 * (cell_width + metrics.grid_gap);
                         let cell_rect =
                             Rect::from_min_size(egui::pos2(left, top), Vec2::splat(cell_width));
                         let response = ui.interact(
@@ -1237,9 +1332,9 @@ impl GalleryApp {
             stage,
             CornerRadius::ZERO,
             if palette.dark {
-                Color32::from_rgb(23, 23, 23)
+                palette.bg
             } else {
-                Color32::from_rgb(246, 246, 246)
+                palette.card_hover
             },
         );
 
@@ -1307,7 +1402,7 @@ impl GalleryApp {
                         .rect_filled(rect.expand(2.0), CornerRadius::same(4), palette.shadow);
                 }
                 draw_texture(ui, crate_texture_id, rect, Color32::WHITE);
-                if self.edit_panel_open && self.crop_active {
+                if self.edit_panel_open && self.right_tab == RightTab::Edit && self.crop_active {
                     if let Some(dimensions) = dimensions {
                         let source = [dimensions[0] as f32, dimensions[1] as f32];
                         crate::ui::edit_panel::crop_overlay(self, ui, rect, source);

@@ -1,4 +1,7 @@
 use crate::theme::Palette;
+pub use crate::ui::icons::{
+    paint_folder_icon, paint_icon, paint_image_icon, paint_search_icon, Icon,
+};
 use egui::{
     Button, Color32, CornerRadius, FontId, Frame, Id, Margin, Rect, Response, RichText, Sense,
     Stroke, StrokeKind, TextEdit, Ui, Vec2,
@@ -7,6 +10,7 @@ use egui::{
 pub const SEARCH_ID: &str = "gallery-search";
 
 pub fn flat_button(ui: &mut Ui, label: &str, palette: Palette) -> Response {
+    let m = palette.metrics;
     ui.scope(|ui| {
         let widgets = &mut ui.style_mut().visuals.widgets;
         widgets.inactive.bg_fill = Color32::TRANSPARENT;
@@ -20,25 +24,28 @@ pub fn flat_button(ui: &mut Ui, label: &str, palette: Palette) -> Response {
         ui.add(
             Button::new(RichText::new(label).color(palette.text))
                 .frame(true)
-                .corner_radius(8),
+                .corner_radius(m.radius_md)
+                .min_size(Vec2::new(0.0, m.control_h_md)),
         )
     })
     .inner
 }
 
 pub fn accent_button(ui: &mut Ui, label: &str, palette: Palette) -> Response {
+    let m = palette.metrics;
     ui.add(
         Button::new(RichText::new(label).color(palette.on_accent))
             .fill(palette.accent)
             .stroke(Stroke::NONE)
-            .corner_radius(9)
-            .min_size(Vec2::new(0.0, 32.0)),
+            .corner_radius(m.radius_md)
+            .min_size(Vec2::new(0.0, m.control_h_md)),
     )
 }
 
 /// Small chip button used for preset rows: filled when selected, ghost
 /// otherwise, so the active choice is always visible.
 pub fn toggle_button(ui: &mut Ui, label: &str, selected: bool, palette: Palette) -> Response {
+    let m = palette.metrics;
     ui.add(
         Button::new(RichText::new(label).size(12.0).color(if selected {
             palette.on_accent
@@ -53,14 +60,15 @@ pub fn toggle_button(ui: &mut Ui, label: &str, selected: bool, palette: Palette)
         .stroke(if selected {
             Stroke::NONE
         } else {
-            Stroke::new(1.0, palette.border)
+            Stroke::new(1.0, palette.input)
         })
-        .corner_radius(8)
-        .min_size(Vec2::new(0.0, 24.0)),
+        .corner_radius(m.radius_sm)
+        .min_size(Vec2::new(0.0, m.control_h_sm - 8.0)),
     )
 }
 
 pub fn symbol_button(ui: &mut Ui, glyph: &str, palette: Palette) -> Response {
+    let m = palette.metrics;
     let response = ui.scope(|ui| {
         let widgets = &mut ui.style_mut().visuals.widgets;
         widgets.inactive.bg_fill = Color32::TRANSPARENT;
@@ -74,8 +82,8 @@ pub fn symbol_button(ui: &mut Ui, glyph: &str, palette: Palette) -> Response {
         ui.add(
             Button::new(RichText::new(glyph).size(17.0).color(palette.text))
                 .frame(true)
-                .min_size(Vec2::new(32.0, 32.0))
-                .corner_radius(8),
+                .min_size(Vec2::splat(m.control_h_sm))
+                .corner_radius(m.radius_md),
         )
     })
     .inner;
@@ -88,10 +96,11 @@ pub fn segmented<T: Copy + PartialEq>(
     value: &mut T,
     palette: Palette,
 ) -> bool {
+    let m = palette.metrics;
     let mut changed = false;
     Frame::new()
         .fill(palette.card)
-        .corner_radius(9)
+        .corner_radius(m.radius_md)
         .inner_margin(Margin::same(2))
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
@@ -109,8 +118,8 @@ pub fn segmented<T: Copy + PartialEq>(
                         Color32::TRANSPARENT
                     })
                     .stroke(Stroke::NONE)
-                    .corner_radius(7)
-                    .min_size(Vec2::new(27.0, 23.0)),
+                    .corner_radius(m.radius_sm)
+                    .min_size(Vec2::new(27.0, m.control_h_sm - 8.0)),
                 );
                 if response.clicked() && !selected {
                     *value = *option;
@@ -122,7 +131,8 @@ pub fn segmented<T: Copy + PartialEq>(
 }
 
 pub fn switch(ui: &mut Ui, on: &mut bool, palette: Palette) -> Response {
-    let desired = Vec2::new(40.0, 22.0);
+    let m = palette.metrics;
+    let desired = Vec2::new(m.switch_w, m.switch_h);
     let (rect, mut response) = ui.allocate_exact_size(desired, Sense::click());
     if response.clicked() {
         *on = !*on;
@@ -132,18 +142,20 @@ pub fn switch(ui: &mut Ui, on: &mut bool, palette: Palette) -> Response {
     let animation = ui
         .ctx()
         .animate_bool_with_time(response.id, *on, 0.12);
-    let background = if *on {
-        palette.accent
-    } else {
-        palette.card_hover
-    };
+    let background = if *on { palette.accent } else { palette.input };
+    let radius = (m.switch_h * 0.5) as u8;
     ui.painter()
-        .rect_filled(rect, CornerRadius::same(11), background);
-    let knob_x = egui::lerp((rect.left() + 11.0)..=(rect.right() - 11.0), animation);
+        .rect_filled(rect, CornerRadius::same(radius), background);
+    let pad = 2.0;
+    let knob = m.switch_h * 0.5 - pad;
+    let knob_x = egui::lerp(
+        (rect.left() + knob + pad)..=(rect.right() - knob - pad),
+        animation,
+    );
     ui.painter().circle_filled(
         egui::pos2(knob_x, rect.center().y),
-        8.0,
-        Color32::WHITE,
+        knob,
+        if *on { palette.on_accent } else { palette.card },
     );
     response
 }
@@ -184,9 +196,10 @@ pub fn color_wheel(
     palette: Palette,
 ) -> bool {
     let mut changed = false;
+    let m = palette.metrics;
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
-            let size = Vec2::splat(76.0);
+            let size = Vec2::splat(m.wheel_size);
             let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
             let center = rect.center();
             let outer = rect.width() * 0.5 - 1.0;
@@ -242,51 +255,57 @@ pub fn color_wheel(
             let (chip, _) = ui
                 .allocate_exact_size(Vec2::new(ui.available_width().min(16.0), 6.0), Sense::hover());
             ui.painter().rect_filled(chip, CornerRadius::same(3), tint);
-            changed |= slider(ui, &mut value.luminance, -100.0..=100.0, 1.0, "Lum");
+            changed |= slider(ui, &mut value.luminance, -100.0..=100.0, 1.0, "Lum", palette);
         });
     });
     changed
 }
 
-/// Adwaita-styled labelled slider; returns true when the value changed.
+/// shadcn-outlined labelled slider; returns true when the value changed.
 pub fn slider(
     ui: &mut Ui,
     value: &mut f32,
     range: std::ops::RangeInclusive<f32>,
     step: f32,
     label: &str,
+    palette: Palette,
 ) -> bool {
     let before = *value;
     let slider = egui::Slider::new(value, range)
         .step_by(step as f64)
         .show_value(true)
         .text(label);
-    let response = ui.add(slider);
+    let response = ui
+        .scope(|ui| {
+            let widgets = &mut ui.style_mut().visuals.widgets;
+            widgets.inactive.bg_fill = palette.input;
+            widgets.inactive.weak_bg_fill = palette.input;
+            widgets.hovered.bg_fill = palette.ring;
+            widgets.hovered.weak_bg_fill = palette.ring;
+            widgets.active.bg_fill = palette.accent;
+            widgets.active.weak_bg_fill = palette.accent;
+            widgets.active.fg_stroke = Stroke::new(1.0, palette.on_accent);
+            ui.add(slider)
+        })
+        .inner;
     response.changed() && *value != before
 }
 
 pub fn search_field(ui: &mut Ui, text: &mut String, width: f32, palette: Palette) -> bool {
-    let total = Vec2::new(width + 68.0, 32.0);
+    let m = palette.metrics;
+    let total = Vec2::new(width + 68.0, m.control_h_md);
     let (rect, _) = ui.allocate_exact_size(total, Sense::hover());
     let painter = ui.painter();
-    painter.rect_filled(
-        rect,
-        CornerRadius::same(16),
-        if palette.dark {
-            Color32::from_rgb(34, 34, 34)
-        } else {
-            Color32::from_rgb(255, 255, 255)
-        },
-    );
+    painter.rect_filled(rect, CornerRadius::same(m.radius_md), palette.card);
     painter.rect_stroke(
         rect,
-        CornerRadius::same(16),
-        Stroke::new(1.0, palette.border),
+        CornerRadius::same(m.radius_md),
+        Stroke::new(1.0, palette.input),
         StrokeKind::Inside,
     );
 
     let icon_rect = Rect::from_min_size(
-        rect.min + Vec2::new(13.0, (rect.height() - 15.0) * 0.5),
+        rect.min + Vec2::new(11.0, (rect.height() - 15.0) * 0.5),
         Vec2::splat(15.0),
     );
     paint_search_icon(ui, icon_rect, palette.dim);
@@ -336,88 +355,12 @@ pub fn search_field(ui: &mut Ui, text: &mut String, width: f32, palette: Palette
     changed
 }
 
-pub fn paint_folder_icon(ui: &Ui, rect: egui::Rect, color: Color32) {
-    let painter = ui.painter();
-    let tab = egui::Rect::from_min_size(
-        rect.left_top() + egui::vec2(0.0, rect.height() * 0.12),
-        egui::vec2(rect.width() * 0.46, rect.height() * 0.24),
-    );
-    painter.rect_filled(tab, CornerRadius::same(2), color);
-    let body = egui::Rect::from_min_max(
-        rect.left_top() + egui::vec2(0.0, rect.height() * 0.28),
-        rect.right_bottom(),
-    );
-    painter.rect_filled(body, CornerRadius::same(3), color);
-}
-
-pub fn paint_search_icon(ui: &Ui, rect: egui::Rect, color: Color32) {
-    let painter = ui.painter();
-    let radius = rect.width() * 0.3;
-    let center = rect.left_top() + egui::vec2(radius + 1.0, radius + 1.0);
-    painter.circle_stroke(center, radius, Stroke::new(1.3, color));
-    painter.line_segment(
-        [
-            center + egui::vec2(radius * 0.72, radius * 0.72),
-            rect.right_bottom(),
-        ],
-        Stroke::new(1.4, color),
-    );
-}
-
-pub fn paint_image_icon(ui: &Ui, rect: egui::Rect, color: Color32) {
-    let painter = ui.painter();
-    painter.rect_stroke(
-        rect,
-        CornerRadius::same(3),
-        Stroke::new(1.4, color),
-        StrokeKind::Inside,
-    );
-    let sun = egui::pos2(rect.left() + rect.width() * 0.3, rect.top() + rect.height() * 0.3);
-    painter.circle_filled(sun, rect.width() * 0.07, color);
-    painter.line_segment(
-        [
-            egui::pos2(rect.left() + rect.width() * 0.12, rect.bottom() - rect.height() * 0.15),
-            egui::pos2(rect.left() + rect.width() * 0.45, rect.top() + rect.height() * 0.5),
-        ],
-        Stroke::new(1.4, color),
-    );
-    painter.line_segment(
-        [
-            egui::pos2(rect.left() + rect.width() * 0.35, rect.top() + rect.height() * 0.62),
-            egui::pos2(rect.right() - rect.width() * 0.1, rect.bottom() - rect.height() * 0.15),
-        ],
-        Stroke::new(1.4, color),
-    );
-}
-
 pub fn small_caps(ui: &mut Ui, text: &str, palette: Palette) {
     ui.label(
         RichText::new(text.to_uppercase())
             .font(FontId::proportional(10.5))
             .color(palette.dim),
     );
-}
-
-// ---------------------------------------------------------------------------
-// Lucide-style icons, drawn as painter geometry (24x24 viewBox mapped to rect)
-// ---------------------------------------------------------------------------
-
-#[derive(Clone, Copy, PartialEq, Debug)]
-#[allow(dead_code)] // Check/Sun/Moon kept for upcoming panel polish
-pub enum Icon {
-    Menu,
-    RefreshCw,
-    RotateLeft,
-    RotateRight,
-    FlipH,
-    FlipV,
-    Crop,
-    Sliders,
-    Download,
-    Check,
-    Sun,
-    Moon,
-    Info,
 }
 
 /// Ghost icon button (transparent until hovered), shadcn `ghost`/`sm` style.
@@ -427,232 +370,49 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, palette: Palette) -> Response {
 
 /// Accent-filled icon button (shadcn `primary`/`sm`).
 pub fn accent_icon_button(ui: &mut Ui, icon: Icon, palette: Palette) -> Response {
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(30.0), Sense::click());
+    let m = palette.metrics;
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(m.icon_button), Sense::click());
     let fill = if response.hovered() || response.is_pointer_button_down_on() {
-        palette.accent.gamma_multiply(1.12)
+        palette.accent_hover
     } else {
         palette.accent
     };
     ui.painter()
-        .rect_filled(rect, CornerRadius::same(8), fill);
-    paint_icon(ui, icon, rect.shrink(6.0), palette.on_accent);
+        .rect_filled(rect, CornerRadius::same(m.radius_md), fill);
+    paint_icon(ui, icon, rect.shrink(m.space_sm), palette.on_accent);
+    response
+}
+
+/// Ghost icon button that shows the accent surface when `active`, used for
+/// panel tabs (shadcn `ghost` with `data-state=active`).
+pub fn toggle_icon_button(
+    ui: &mut Ui,
+    icon: Icon,
+    active: bool,
+    palette: Palette,
+) -> Response {
+    let m = palette.metrics;
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(m.icon_button), Sense::click());
+    if active {
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(m.radius_md), palette.card_hover);
+    } else if response.hovered() || response.is_pointer_button_down_on() {
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(m.radius_md), palette.card_hover);
+    }
+    let color = if active { palette.text } else { palette.dim };
+    paint_icon(ui, icon, rect.shrink(m.space_sm), color);
     response
 }
 
 fn ghost_icon_button(ui: &mut Ui, icon: Icon, palette: Palette, color: Color32) -> Response {
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(30.0), Sense::click());
+    let m = palette.metrics;
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(m.icon_button), Sense::click());
     if response.hovered() || response.is_pointer_button_down_on() {
         ui.painter()
-            .rect_filled(rect, CornerRadius::same(8), palette.card_hover);
+            .rect_filled(rect, CornerRadius::same(m.radius_md), palette.card_hover);
     }
-    let inner = rect.shrink(6.0);
+    let inner = rect.shrink(m.space_sm);
     paint_icon(ui, icon, inner, color);
     response
-}
-
-/// Filled arc drawn as a line polyline (degrees 0 = east, positive clockwise
-/// screen space).
-pub fn arc(
-    painter: &egui::Painter,
-    center: egui::Pos2,
-    radius: f32,
-    from_deg: f32,
-    to_deg: f32,
-    stroke: Stroke,
-) {
-    let steps = 24;
-    let points: Vec<egui::Pos2> = (0..=steps)
-        .map(|k| {
-            let t = k as f32 / steps as f32;
-            let a_deg = egui::lerp(from_deg..=to_deg, t);
-            let a = a_deg.to_radians();
-            center + egui::vec2(a.cos(), a.sin()) * radius
-        })
-        .collect();
-    painter.add(egui::Shape::line(points, stroke));
-}
-
-pub fn paint_icon(ui: &Ui, icon: Icon, rect: Rect, color: Color32) {
-    let painter = ui.painter();
-    let stroke = Stroke::new(1.6, color);
-    let l = rect.left();
-    let r = rect.right();
-    let t = rect.top();
-    let b = rect.bottom();
-    let m = (l + r) * 0.5;
-    let cy = (t + b) * 0.5;
-
-    match icon {
-        Icon::Menu => {
-            for k in 0..3 {
-                let y = t + rect.height() * (0.18 + 0.32 * k as f32);
-                painter.line_segment([egui::pos2(l, y), egui::pos2(r, y)], stroke);
-            }
-        }
-        Icon::RefreshCw => {
-            // open circular arrows (two half arcs with arrowheads)
-            let radius = rect.width() * 0.38;
-            let center = egui::pos2(m, cy);
-            arc(painter, center, radius, 170.0, 350.0, stroke);
-            arc(painter, center, radius, -10.0, 170.0, stroke);
-            // arrowheads at arc ends
-            painter.line_segment(
-                [egui::pos2(m + radius, cy - radius * 0.5), egui::pos2(m + radius, cy + 1.0)],
-                stroke,
-            );
-        }
-        Icon::RotateLeft | Icon::RotateRight => {
-            let ccw = icon == Icon::RotateLeft;
-            let radius = rect.width() * 0.40;
-            let center = egui::pos2(m, cy - rect.height() * 0.06);
-            let (from, to): (f32, f32) = if ccw {
-                (-170.0, 60.0)
-            } else {
-                (110.0, 340.0)
-            };
-            arc(painter, center, radius, from, to, stroke);
-            // arrowhead at the start of the arc (top edge)
-            let head = egui::pos2(m + if ccw { -radius } else { radius }, cy - rect.height() * 0.30);
-            let dir = if ccw { 0.55 } else { -0.55 };
-            painter.line_segment(
-                [head, head + egui::vec2(-dir * 4.0, -3.4)],
-                stroke,
-            );
-            painter.line_segment([head, head + egui::vec2(dir * 4.0, -3.4)], stroke);
-        }
-        Icon::FlipH => {
-            // mirrored triangles split by vertical edge
-            let inner = 2.0;
-            let bl = egui::pos2(l + inner, b - inner);
-            let tl = egui::pos2(l + inner, t + inner);
-            let mr = egui::pos2(m - 1.0, cy);
-            painter.line_segment([tl, mr], stroke);
-            painter.line_segment([mr, bl], stroke);
-            let br = egui::pos2(r - inner, b - inner);
-            let tr = egui::pos2(r - inner, t + inner);
-            let ml = egui::pos2(m + 1.0, cy);
-            painter.line_segment([tr, ml], stroke);
-            painter.line_segment([ml, br], stroke);
-            painter.line_segment([egui::pos2(m, t + 1.0), egui::pos2(m, b - 1.0)], stroke);
-        }
-        Icon::FlipV => {
-            let inner = 2.0;
-            let tl = egui::pos2(l + inner, t + inner);
-            let tr = egui::pos2(r - inner, t + inner);
-            let mc = egui::pos2(m, (t + inner + cy) * 0.5);
-            painter.line_segment([tl, mc], stroke);
-            painter.line_segment([mc, tr], stroke);
-            let bl = egui::pos2(l + inner, b - inner);
-            let br = egui::pos2(r - inner, b - inner);
-            let mb = egui::pos2(m, (cy + 1.0 + b - inner) * 0.5);
-            painter.line_segment([bl, mb], stroke);
-            painter.line_segment([mb, br], stroke);
-            painter.line_segment([egui::pos2(l + 1.0, cy), egui::pos2(r - 1.0, cy)], stroke);
-        }
-        Icon::Crop => {
-            // M6 2 V16 a2 2 0 0 0 2 2 H22  +  M22 8 V8H8 a2 2 0 0 0 -2 2 V22 ... simplified lucide crop
-            let x0 = l + rect.width() * 0.28;
-            let y0 = t + rect.height() * 0.28;
-            let x1 = r - rect.width() * 0.24;
-            let y1 = b - rect.height() * 0.24;
-            painter
-                .line_segment([egui::pos2(x0, t + 2.0), egui::pos2(x0, y1 - 4.0)], stroke);
-            arc(painter, egui::pos2(x0 + 4.0, y1 - 4.0), 4.0, 90.0, 180.0, stroke);
-            painter.line_segment([egui::pos2(x0 + 4.0, y1), egui::pos2(r - 2.0, y1)], stroke);
-            painter.line_segment([egui::pos2(r - 2.0, y1 - 6.0), egui::pos2(r - 2.0, y1)], stroke);
-            painter.line_segment(
-                [egui::pos2(x1, b - 2.0), egui::pos2(x1, y0)],
-                stroke,
-            );
-            arc(painter, egui::pos2(x1 - 4.0, y0), 4.0, 270.0, 360.0, stroke);
-            painter.line_segment([egui::pos2(x1 - 4.0, y0 - 4.0), egui::pos2(l + 2.0, y0 - 4.0)], stroke);
-            painter.line_segment([egui::pos2(l + 2.0, y0 - 4.0), egui::pos2(l + 2.0, y0 + 2.0)], stroke);
-        }
-        Icon::Sliders => {
-            // three horizontal lines with knobs at staggered heights
-            for k in 0..3 {
-                let y = t + rect.height() * (0.14 + 0.36 * k as f32);
-                let knob_x = match k {
-                    0 => l + rect.width() * 0.62,
-                    1 => l + rect.width() * 0.30,
-                    _ => l + rect.width() * 0.72,
-                };
-                painter.line_segment(
-                    [egui::pos2(l, y), egui::pos2(r, y)],
-                    stroke,
-                );
-                painter.circle_filled(egui::pos2(knob_x, y), 2.4, color);
-            }
-        }
-        Icon::Download => {
-            let top = t + rect.height() * 0.20;
-            let bottom = b - rect.height() * 0.32;
-            painter.line_segment([egui::pos2(m, top), egui::pos2(m, bottom)], stroke);
-            painter.line_segment(
-                [egui::pos2(m - 3.6, bottom - 4.0), egui::pos2(m, bottom)],
-                stroke,
-            );
-            painter.line_segment(
-                [egui::pos2(m + 3.6, bottom - 4.0), egui::pos2(m, bottom)],
-                stroke,
-            );
-            painter.line_segment([egui::pos2(l, b - 3.0), egui::pos2(l, b)], stroke);
-            painter.line_segment([egui::pos2(l, b), egui::pos2(r, b)], stroke);
-            painter.line_segment([egui::pos2(r, b), egui::pos2(r, b - 3.0)], stroke);
-        }
-        Icon::Check => {
-            painter.line_segment(
-                [
-                    egui::pos2(l + rect.width() * 0.15, cy + 0.5),
-                    egui::pos2(l + rect.width() * 0.42, b - rect.height() * 0.18),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    egui::pos2(l + rect.width() * 0.42, b - rect.height() * 0.18),
-                    egui::pos2(r - rect.width() * 0.12, t + rect.height() * 0.18),
-                ],
-                stroke,
-            );
-        }
-        Icon::Sun => {
-            let radius = rect.width() * 0.26;
-            painter.circle_stroke(egui::pos2(m, cy), radius, stroke);
-            for k in 0..8 {
-                let ang = k as f32 * std::f32::consts::TAU / 8.0;
-                let dir = egui::vec2(ang.cos(), ang.sin());
-                painter.line_segment(
-                    [
-                        egui::pos2(m, cy) + dir * (radius + 1.5),
-                        egui::pos2(m, cy) + dir * (radius + 4.5),
-                    ],
-                    stroke,
-                );
-            }
-        }
-        Icon::Moon => {
-            let radius = rect.width() * 0.67;
-            let center = egui::pos2(m, cy);
-            // crescent: big arc + cut-back arc
-            arc(painter, center, radius, -138.0, 138.0, stroke);
-            arc(
-                painter,
-                center + egui::vec2(radius * 0.55, 0.0),
-                radius * 0.78,
-                115.0,
-                245.0,
-                stroke,
-            );
-        }
-        Icon::Info => {
-            let radius = rect.width() * 0.42;
-            painter.circle_stroke(egui::pos2(m, cy), radius, stroke);
-            painter.circle_filled(egui::pos2(m, t + rect.height() * 0.34), 1.4, color);
-            painter.line_segment(
-                [egui::pos2(m, cy + 0.5), egui::pos2(m, b - rect.height() * 0.24)],
-                stroke,
-            );
-        }
-    }
 }

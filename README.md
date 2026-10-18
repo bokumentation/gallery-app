@@ -1,13 +1,13 @@
 # Gallery
 
-A fast, GNOME-style image gallery and editor built with Rust, egui 0.37, and
+A fast, shadcn-styled image gallery and editor built with Rust, egui 0.37, and
 wgpu/Vulkan.
 
 ## Features
 
 Browse:
 
-- GNOME/Adwaita-inspired light and dark themes, following the system color scheme on startup
+- shadcn/ui zinc light and dark themes, following the system color scheme on startup
 - Folder tree in the sidebar with lazy expansion, plus Home / Pictures / Downloads / Desktop shortcuts
 - Non-recursive and recursive folder scanning
 - Virtualized thumbnail grid: only visible rows are decoded and drawn
@@ -26,8 +26,11 @@ Browse:
 Edit (right-side adjust panel, RapidRAW-style layout):
 
 - Top toolbar with rotate ⟲/⟳ 90° steps, flip H/V, crop toggle, adjust toggle,
-  and an accent Export button (full-resolution JPEG + JSON sidecar); bottom bar
-  with filename, dimensions and file size
+  copy path, image-info toggle, open-in-file-manager, and an accent Export
+  button (full-resolution JPEG + JSON sidecar); bottom bar with filename,
+  dimensions and file size
+- Right panel switches between **Adjust** and **Image Info** (path, dimensions,
+  export size, megapixels, file size, format, modified time, edit summary)
 - Crop tool: on-image overlay (dim outside, rule-of-thirds grid, corner grips,
   drag), aspect presets, free straightening, crop semantics handled in GPU
   geometry (shader.wgsl), Escape exits crop first
@@ -48,8 +51,9 @@ Edit (right-side adjust panel, RapidRAW-style layout):
   shader; the LUT section is the first section in the panel
 - Export: full-resolution decode, the same grade compute pass offscreen, GPU
   readback, JPEG encode with a `.json` sidecar describing the recipe
-- Shadcn-aesthetic widgets: ghost/primary icon buttons with Lucide-style
-  painted icons, switches, sliders, color wheels
+- shadcn/ui design system implemented in-tree: zinc light/dark tokens, neutral
+  primary controls, shadcn button/switch/slider/tab styling, and a data-driven
+  Lucide icon table (no icon-font or shadcn crate dependency)
 
 Supported formats: JPEG, PNG, WebP, GIF (first frame), BMP, TIFF.
 
@@ -113,10 +117,15 @@ context in a worker thread at app startup, so it does not block the UI.
 
 ## Design
 
-- `src/theme.rs` — Adwaita light/dark palettes, system theme detection, bundled Inter fonts, ppi snapping
-- `src/app.rs` — application state, layout, grid/viewer, keyboard handling, toolbar
-- `src/ui/edit_panel.rs` — right adjust panel (LUT / light / color / HSL / grading / crop), crop overlay
-- `src/ui/widgets.rs` — shadcn-aesthetic buttons/icons, switch, sliders, color wheels
+- `src/theme.rs` — system theme detection, bundled Inter fonts, egui `Visuals`/`Style` mapping
+- `src/ui/tokens.rs` — compile-time design tokens: shadcn zinc light/dark palettes, metrics (radii, spacing, control sizes, panel widths)
+- `src/ui/icons.rs` — data-driven Lucide icon geometry (`IconDef`/`StrokeDef`) and the renderer
+- `src/ui/actions.rs` — declarative top-bar action lists and button styles
+- `src/ui/layout.rs` — right-panel tabs and edit-section order
+- `src/ui/edit_panel.rs` — right adjust panel sections, crop overlay
+- `src/ui/info_panel.rs` — Image Info tab (path, dimensions, size, format, modified, edit summary)
+- `src/ui/widgets.rs` — shadcn-styled buttons, icon buttons, switch, sliders, tabs/chips, color wheels
+- `src/app.rs` — application state, layout, grid/viewer, keyboard handling, top bar rendering
 - `src/grade/mod.rs` — `EditState` (crop/aspect/orientation/adjustments/HSL/grading/LUT)
 - `src/grade/gpu.rs` — `GradeCore`/`GradePass`: WGSL grading compute pipeline, uniforms, LUT registry
 - `src/grade/shader.wgsl` — geometry + color pipeline, ported math from RapidRAW
@@ -129,6 +138,26 @@ context in a worker thread at app startup, so it does not block the UI.
 - `src/viewer.rs` — full-image decode workers, prefetching, LRU cache, GPU uploads
 - `src/nvjpeg.rs` — dynamically loaded nvJPEG bindings and CUDA decoding
 - `src/zerocopy.rs` — CUDA-imported Vulkan buffers and the RGB → RGBA compute pass
+
+## Customizing the UI
+
+The UI is data-driven; no widget rewrites are needed for the common changes:
+
+- **Colors** — edit the `Palette::light()` / `Palette::dark()` presets in
+  `src/ui/tokens.rs`. The fields map onto the shadcn roles (`background`,
+  `foreground`, `muted`, `primary`, `border`, `ring`, …).
+- **Sizes, radii, spacing** — edit `Metrics::default()` in `src/ui/tokens.rs`
+  (panel/sidebar widths, bar heights, control heights, radii, gaps).
+- **Icons** — edit the `StrokeDef` tables in `src/ui/icons.rs`; add an `Icon`
+  variant and a `icon_def` arm to add a new one.
+- **Top bar** — move an `ActionId` between `LEFT_ACTIONS`, `MIDDLE_ACTIONS` and
+  `RIGHT_ACTIONS` in `src/ui/actions.rs`; change `ButtonStyle` to restyle it.
+- **Right panel** — switch the tab list in `src/ui/layout.rs` or reorder
+  `EDIT_SECTIONS` to rearrange the adjust panel.
+
+The shadcn Rust crates (`shadcn-egui`, `egui-shadcn`) currently target
+egui 0.33/0.34, so this project implements the shadcn tokens and components
+in-tree for egui 0.37 instead of downgrading the graphics stack.
 
 Rendering is GPU-accelerated through `eframe`'s wgpu renderer. It prefers Vulkan
 on the discrete GPU and falls back to OpenGL only if Vulkan is unavailable.
@@ -146,6 +175,7 @@ display texture. No image pixels cross PCIe or the CPU after decoding.
 
 ## Roadmap
 
+- Zoom/pan in the viewer (wheel zoom at cursor, drag pan, Fit / 100%)
 - GPU nvJPEG export encode: hand the graded pixels to nvJPEG from device memory
   (the export readback path is the current bottleneck) instead of CPU JPEG
 - Re-import the sidecar to restore a grade on a previously exported image
@@ -154,4 +184,4 @@ display texture. No image pixels cross PCIe or the CPU after decoding.
 - Full-resolution display textures: dedicated 100% viewing
 - Thumbnail cache size limit and cleanup
 - Remember last folder, window size, and theme between launches
-- Zoom/pan in the viewer
+- Optional `theme.toml` runtime overrides for the compile-time tokens

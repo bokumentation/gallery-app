@@ -14,18 +14,27 @@ use egui::{CollapsingHeader, Color32, Frame, Margin, Rect, RichText, Ui};
 
 pub fn show(app: &mut GalleryApp, ui: &mut Ui) {
     let palette = app.palette;
-    egui::Panel::right("edit_panel")
+    let metrics = palette.metrics;
+    egui::Panel::right("right_panel")
         .resizable(false)
-        .exact_size(300.0)
+        .exact_size(metrics.panel_w)
         .frame(
             Frame::new()
                 .fill(palette.sidebar)
-                .inner_margin(Margin::symmetric(8, 10)),
+                .inner_margin(Margin::symmetric(
+                    metrics.space_sm as i8,
+                    metrics.space_md as i8,
+                )),
         )
         .show(ui, |ui| {
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
-                .show(ui, |ui| panel_content(app, ui));
+                .show(ui, |ui| match app.right_tab {
+                    crate::ui::layout::RightTab::Edit => panel_content(app, ui),
+                    crate::ui::layout::RightTab::Info => {
+                        crate::ui::info_panel::panel_content(app, ui)
+                    }
+                });
         });
 }
 
@@ -45,12 +54,17 @@ fn panel_content(app: &mut GalleryApp, ui: &mut Ui) {
     // Seed the per-image edit entry so values survive the viewer.
     app.edits.entry(path.clone()).or_default();
 
-    lut_section(app, &path, ui);
-    light_section(app, &path, ui);
-    color_section(app, &path, ui);
-    hsl_section(app, &path, ui);
-    grading_section(app, &path, ui);
-    crop_section(app, &path, ui);
+    for &section in crate::ui::layout::EDIT_SECTIONS {
+        use crate::ui::layout::Section;
+        match section {
+            Section::Lut => lut_section(app, &path, ui),
+            Section::Light => light_section(app, &path, ui),
+            Section::Color => color_section(app, &path, ui),
+            Section::Hsl => hsl_section(app, &path, ui),
+            Section::Grading => grading_section(app, &path, ui),
+            Section::Crop => crop_section(app, &path, ui),
+        }
+    }
 
     ui.add_space(10.0);
     if w::accent_button(ui, "Reset all", palette).clicked() {
@@ -213,7 +227,7 @@ fn crop_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
 
             ui.add_space(4.0);
             let mut rotation = state.rotation;
-            if w::slider(ui, &mut rotation, -45.0..=45.0, 0.5, "Straighten") {
+            if w::slider(ui, &mut rotation, -45.0..=45.0, 0.5, "Straighten", palette) {
                 let geometry = CropGeom {
                     oriented: oriented_f32,
                     rotation_deg: rotation,
@@ -236,32 +250,34 @@ fn crop_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
 }
 
 fn light_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
+    let palette = app.palette;
     CollapsingHeader::new(RichText::new("Light").size(12.5))
         .default_open(true)
         .show(ui, |ui| {
             let adjustments =
                 &mut app.edits.entry(path.clone()).or_default().adjustments;
-            let _ = w::slider(ui, &mut adjustments.exposure, -5.0..=5.0, 0.01, "Exposure");
-            let _ = w::slider(ui, &mut adjustments.brightness, -5.0..=5.0, 0.01, "Brightness");
-            let _ = w::slider(ui, &mut adjustments.contrast, -100.0..=100.0, 1.0, "Contrast");
-            let _ = w::slider(ui, &mut adjustments.highlights, -100.0..=100.0, 1.0, "Highlights");
-            let _ = w::slider(ui, &mut adjustments.shadows, -100.0..=100.0, 1.0, "Shadows");
-            let _ = w::slider(ui, &mut adjustments.whites, -100.0..=100.0, 1.0, "Whites");
-            let _ = w::slider(ui, &mut adjustments.blacks, -100.0..=100.0, 1.0, "Blacks");
+            let _ = w::slider(ui, &mut adjustments.exposure, -5.0..=5.0, 0.01, "Exposure", palette);
+            let _ = w::slider(ui, &mut adjustments.brightness, -5.0..=5.0, 0.01, "Brightness", palette);
+            let _ = w::slider(ui, &mut adjustments.contrast, -100.0..=100.0, 1.0, "Contrast", palette);
+            let _ = w::slider(ui, &mut adjustments.highlights, -100.0..=100.0, 1.0, "Highlights", palette);
+            let _ = w::slider(ui, &mut adjustments.shadows, -100.0..=100.0, 1.0, "Shadows", palette);
+            let _ = w::slider(ui, &mut adjustments.whites, -100.0..=100.0, 1.0, "Whites", palette);
+            let _ = w::slider(ui, &mut adjustments.blacks, -100.0..=100.0, 1.0, "Blacks", palette);
         });
 }
 
 fn color_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
+    let palette = app.palette;
     CollapsingHeader::new(RichText::new("Color").size(12.5))
         .default_open(true)
         .show(ui, |ui| {
             let adjustments =
                 &mut app.edits.entry(path.clone()).or_default().adjustments;
-            let _ = w::slider(ui, &mut adjustments.temperature, -100.0..=100.0, 1.0, "Temperature");
-            let _ = w::slider(ui, &mut adjustments.tint, -100.0..=100.0, 1.0, "Tint");
-            let _ = w::slider(ui, &mut adjustments.saturation, -100.0..=100.0, 1.0, "Saturation");
-            let _ = w::slider(ui, &mut adjustments.vibrance, -100.0..=100.0, 1.0, "Vibrance");
-            let _ = w::slider(ui, &mut adjustments.hue, -180.0..=180.0, 1.0, "Hue");
+            let _ = w::slider(ui, &mut adjustments.temperature, -100.0..=100.0, 1.0, "Temperature", palette);
+            let _ = w::slider(ui, &mut adjustments.tint, -100.0..=100.0, 1.0, "Tint", palette);
+            let _ = w::slider(ui, &mut adjustments.saturation, -100.0..=100.0, 1.0, "Saturation", palette);
+            let _ = w::slider(ui, &mut adjustments.vibrance, -100.0..=100.0, 1.0, "Vibrance", palette);
+            let _ = w::slider(ui, &mut adjustments.hue, -180.0..=180.0, 1.0, "Hue", palette);
         });
 }
 
@@ -455,9 +471,9 @@ fn hsl_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
             let index = app.hsl_range.min(crate::grade::HSL_NAMES.len() - 1);
             ui.add_space(4.0);
             let range = &mut app.edits.entry(path.clone()).or_default().adjustments.hsl[index];
-            let _ = w::slider(ui, &mut range.hue, -100.0..=100.0, 1.0, "Hue");
-            let _ = w::slider(ui, &mut range.saturation, -100.0..=100.0, 1.0, "Saturation");
-            let _ = w::slider(ui, &mut range.luminance, -100.0..=100.0, 1.0, "Luminance");
+            let _ = w::slider(ui, &mut range.hue, -100.0..=100.0, 1.0, "Hue", palette);
+            let _ = w::slider(ui, &mut range.saturation, -100.0..=100.0, 1.0, "Saturation", palette);
+            let _ = w::slider(ui, &mut range.luminance, -100.0..=100.0, 1.0, "Luminance", palette);
         });
 }
 
@@ -476,7 +492,7 @@ fn grading_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui)
                 ui.add_space(2.0);
             }
             ui.add_space(4.0);
-            let _ = w::slider(ui, &mut grading.blending, 0.0..=100.0, 1.0, "Blending");
-            let _ = w::slider(ui, &mut grading.balance, -100.0..=100.0, 1.0, "Balance");
+            let _ = w::slider(ui, &mut grading.blending, 0.0..=100.0, 1.0, "Blending", palette);
+            let _ = w::slider(ui, &mut grading.balance, -100.0..=100.0, 1.0, "Balance", palette);
         });
 }
