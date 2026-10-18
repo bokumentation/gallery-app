@@ -221,8 +221,15 @@ pub fn color_wheel(
                     Sense::hover(),
                 );
                 ui.painter().rect_filled(chip, CornerRadius::same(3), tint);
-                ui.spacing_mut().slider_width = 92.0;
-                slider(ui, &mut value.luminance, -100.0..=100.0, 1.0, "Lum", palette)
+                ui.add_space(2.0);
+                slider_compact(
+                    ui,
+                    &mut value.luminance,
+                    -100.0..=100.0,
+                    1.0,
+                    "Lum",
+                    palette,
+                )
             },
         );
         changed |= controls.inner;
@@ -284,7 +291,9 @@ fn wheel_pad(ui: &mut Ui, value: &mut crate::grade::HslRange, palette: Palette) 
     changed
 }
 
-/// shadcn-outlined labelled slider; returns true when the value changed.
+/// Lightroom-style slider row: fixed label | flexible track | fixed value.
+/// The built-in value text is hidden so a `-5.00` value cannot widen the row
+/// and move the panel.
 pub fn slider(
     ui: &mut Ui,
     value: &mut f32,
@@ -294,12 +303,95 @@ pub fn slider(
     palette: Palette,
 ) -> bool {
     let before = *value;
-    let slider = egui::Slider::new(value, range)
-        .step_by(step as f64)
-        .show_value(true)
-        .text(label);
+    let row_h = 26.0;
+    let label_w = 90.0;
+    let value_w = 46.0;
+    let gap = 6.0;
+    let track_w = (ui.available_width() - label_w - value_w - gap * 2.0).max(60.0);
+    let mut changed = false;
+
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = gap;
+        ui.allocate_ui_with_layout(
+            Vec2::new(label_w, row_h),
+            Layout::left_to_right(Align::Center),
+            |ui| {
+                ui.set_max_width(label_w);
+                ui.add(
+                    egui::Label::new(RichText::new(label).size(12.0).color(palette.dim))
+                        .truncate(),
+                );
+            },
+        );
+        let track = ui
+            .allocate_ui_with_layout(
+                Vec2::new(track_w, row_h),
+                Layout::left_to_right(Align::Center),
+                |ui| {
+                    ui.spacing_mut().slider_width = track_w;
+                    let widgets = &mut ui.style_mut().visuals.widgets;
+                    widgets.inactive.bg_fill = palette.input;
+                    widgets.inactive.weak_bg_fill = palette.input;
+                    widgets.hovered.bg_fill = palette.ring;
+                    widgets.hovered.weak_bg_fill = palette.ring;
+                    widgets.active.bg_fill = palette.accent;
+                    widgets.active.weak_bg_fill = palette.accent;
+                    widgets.active.fg_stroke = Stroke::new(1.0, palette.on_accent);
+                    ui.add(
+                        egui::Slider::new(value, range)
+                            .step_by(step as f64)
+                            .show_value(false),
+                    )
+                },
+            )
+            .inner;
+        changed = track.changed();
+        // Read after the slider borrow ends, so the label is current this frame.
+        let display = format_slider_value(*value, step);
+        ui.allocate_ui_with_layout(
+            Vec2::new(value_w, row_h),
+            Layout::right_to_left(Align::Center),
+            |ui| {
+                ui.label(
+                    RichText::new(display)
+                        .size(11.5)
+                        .monospace()
+                        .color(palette.text),
+                );
+            },
+        );
+    });
+
+    changed && *value != before
+}
+
+/// Compact variant for narrow columns (color-wheel luminance): label and value
+/// share a fixed row, the full-width track sits below.
+pub fn slider_compact(
+    ui: &mut Ui,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    step: f32,
+    label: &str,
+    palette: Palette,
+) -> bool {
+    let before = *value;
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(label).size(11.0).color(palette.dim));
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.label(
+                RichText::new(format_slider_value(*value, step))
+                    .size(11.0)
+                    .monospace()
+                    .color(palette.text),
+            );
+        });
+    });
+    let width = ui.available_width().max(60.0);
     let response = ui
         .scope(|ui| {
+            ui.spacing_mut().slider_width = width;
             let widgets = &mut ui.style_mut().visuals.widgets;
             widgets.inactive.bg_fill = palette.input;
             widgets.inactive.weak_bg_fill = palette.input;
@@ -307,11 +399,27 @@ pub fn slider(
             widgets.hovered.weak_bg_fill = palette.ring;
             widgets.active.bg_fill = palette.accent;
             widgets.active.weak_bg_fill = palette.accent;
-            widgets.active.fg_stroke = Stroke::new(1.0, palette.on_accent);
-            ui.add(slider)
+            ui.add(
+                egui::Slider::new(value, range)
+                    .step_by(step as f64)
+                    .show_value(false),
+            )
         })
         .inner;
-    response.changed() && *value != before
+    changed |= response.changed();
+    changed && *value != before
+}
+
+/// Fixed-width numeric label: two decimals for 0.01 steps, one for 0.1, none
+/// for integers. The explicit sign keeps the value column aligned.
+fn format_slider_value(value: f32, step: f32) -> String {
+    if step >= 1.0 {
+        format!("{value:+.0}")
+    } else if step >= 0.1 {
+        format!("{value:+.1}")
+    } else {
+        format!("{value:+.2}")
+    }
 }
 
 pub fn search_field(ui: &mut Ui, text: &mut String, width: f32, palette: Palette) -> bool {
@@ -443,4 +551,19 @@ fn ghost_icon_button(ui: &mut Ui, icon: Icon, palette: Palette, color: Color32) 
     let inner = rect.shrink(m.space_sm);
     paint_icon(ui, icon, inner, color);
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_slider_value;
+
+    #[test]
+    fn slider_values_have_a_stable_column() {
+        assert_eq!(format_slider_value(-5.0, 0.01), "-5.00");
+        assert_eq!(format_slider_value(5.0, 0.01), "+5.00");
+        assert_eq!(format_slider_value(0.0, 0.01), "+0.00");
+        assert_eq!(format_slider_value(-2.5, 0.5), "-2.5");
+        assert_eq!(format_slider_value(5.0, 1.0), "+5");
+        assert_eq!(format_slider_value(-100.0, 1.0), "-100");
+    }
 }

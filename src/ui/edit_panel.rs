@@ -29,10 +29,16 @@ pub fn show(app: &mut GalleryApp, ui: &mut Ui) {
         .show(ui, |ui| {
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
-                .show(ui, |ui| match app.right_tab {
-                    crate::ui::layout::RightTab::Edit => panel_content(app, ui),
-                    crate::ui::layout::RightTab::Info => {
-                        crate::ui::info_panel::panel_content(app, ui)
+                // Reserve the scrollbar width permanently: opening a tall
+                // section must not narrow the content and shift the rows.
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    match app.right_tab {
+                        crate::ui::layout::RightTab::Edit => panel_content(app, ui),
+                        crate::ui::layout::RightTab::Info => {
+                            crate::ui::info_panel::panel_content(app, ui)
+                        }
                     }
                 });
         });

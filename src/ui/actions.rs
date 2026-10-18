@@ -112,13 +112,6 @@ pub const MIDDLE_ACTIONS: &[ActionSpec] = &[
         Visibility::ViewerOpen,
     ),
     icon(
-        ActionId::Sliders,
-        Icon::Sliders,
-        "Adjust panel (E)",
-        ButtonStyle::Ghost,
-        Visibility::ViewerOpen,
-    ),
-    icon(
         ActionId::CopyPath,
         Icon::Copy,
         "Copy image path",
@@ -129,6 +122,13 @@ pub const MIDDLE_ACTIONS: &[ActionSpec] = &[
 
 /// Right group, visual left-to-right. Rendered right-to-left.
 pub const RIGHT_ACTIONS: &[ActionSpec] = &[
+    icon(
+        ActionId::Sliders,
+        Icon::Sliders,
+        "Adjust panel (E)",
+        ButtonStyle::Ghost,
+        Visibility::ViewerOpen,
+    ),
     icon(
         ActionId::Info,
         Icon::Info,

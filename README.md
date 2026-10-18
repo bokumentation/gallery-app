@@ -26,11 +26,12 @@ Browse:
 Edit (right-side adjust panel, RapidRAW-style layout):
 
 - Native GNOME window decorations (Mutter on Wayland, or the X11 window
-  manager), with the app toolbar for rotate ⟲/⟳ 90° steps, flip H/V, crop
-  toggle, adjust toggle, copy path, image-info toggle, open-in-file-manager
-  (opens the folder and selects the image when the desktop supports
-  FileManager1), and an accent Export button; the bottom bar shows filename,
-  dimensions and size
+  manager). The toolbar has rotate ⟲/⟳ 90° steps, flip H/V, crop and copy in
+  the middle, and Adjust / Image Info / open-in-file-manager / Export / theme /
+  refresh on the right; the bottom bar shows filename, dimensions and size
+- Lightroom-style slider rows: a fixed label column, a flexible track and a
+  fixed-width value column (the widget's own value text is hidden), so negative
+  or large values can never resize the right panel
 - Zoom and pan: wheel zooms at the cursor, drag pans, double-click toggles
   Fit ↔ 100%, with a floating bottom-right control (zoom out / percentage /
   zoom in / fit); keys `+` `-` `0` `1`
