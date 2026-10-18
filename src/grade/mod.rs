@@ -73,13 +73,13 @@ impl EditState {
             && !self.flip_v
             && self.lut.is_none()
             && self.adjustments.is_identity()
-    }}
+    }
+}
 
 /// HSL color-mixer hue centres: red, orange, yellow, green, aqua, blue,
 /// purple, magenta (used by the mixer UI in a later phase).
 #[allow(dead_code)]
 pub const HSL_HUES: [f32; 8] = [0.0, 30.0, 60.0, 120.0, 180.0, 240.0, 270.0, 300.0];
-#[allow(dead_code)]
 pub const HSL_NAMES: [&str; 8] = [
     "Red",
     "Orange",

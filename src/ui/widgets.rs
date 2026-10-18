@@ -36,6 +36,30 @@ pub fn accent_button(ui: &mut Ui, label: &str, palette: Palette) -> Response {
     )
 }
 
+/// Small chip button used for preset rows: filled when selected, ghost
+/// otherwise, so the active choice is always visible.
+pub fn toggle_button(ui: &mut Ui, label: &str, selected: bool, palette: Palette) -> Response {
+    ui.add(
+        Button::new(RichText::new(label).size(12.0).color(if selected {
+            palette.on_accent
+        } else {
+            palette.text
+        }))
+        .fill(if selected {
+            palette.accent
+        } else {
+            Color32::TRANSPARENT
+        })
+        .stroke(if selected {
+            Stroke::NONE
+        } else {
+            Stroke::new(1.0, palette.border)
+        })
+        .corner_radius(8)
+        .min_size(Vec2::new(0.0, 24.0)),
+    )
+}
+
 pub fn symbol_button(ui: &mut Ui, glyph: &str, palette: Palette) -> Response {
     let response = ui.scope(|ui| {
         let widgets = &mut ui.style_mut().visuals.widgets;
@@ -122,6 +146,106 @@ pub fn switch(ui: &mut Ui, on: &mut bool, palette: Palette) -> Response {
         Color32::WHITE,
     );
     response
+}
+
+// ---------------------------------------------------------------------------
+// Color wheel (hue/saturation pad) for the split-toning / grading sections
+// ---------------------------------------------------------------------------
+
+/// Convert HSV (h 0..360, s 0..1, v 0..1) to RGB. Local helper for the wheel
+/// gradient; the grading math itself lives on the GPU.
+fn hsv_rgb(h: f32, s: f32, v: f32) -> Color32 {
+    let h = h.rem_euclid(360.0) / 60.0;
+    let c = v * s;
+    let x = c * (1.0 - ((h % 2.0) - 1.0).abs());
+    let (r, g, b) = match h as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = v - c;
+    Color32::from_rgb(
+        ((r + m) * 255.0).round() as u8,
+        ((g + m) * 255.0).round() as u8,
+        ((b + m) * 255.0).round() as u8,
+    )
+}
+
+/// A hue ring with a draggable saturation handle plus a luminance slider.
+/// `value.hue` is degrees, `value.saturation`/`value.luminance` are -/+100
+/// slider units. Returns true when the value changed.
+pub fn color_wheel(
+    ui: &mut Ui,
+    value: &mut crate::grade::HslRange,
+    label: &str,
+    palette: Palette,
+) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.vertical(|ui| {
+            let size = Vec2::splat(76.0);
+            let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
+            let center = rect.center();
+            let outer = rect.width() * 0.5 - 1.0;
+            let inner = outer * 0.62;
+            let painter = ui.painter();
+            // Hue ring: 48 solid-colour quads approximated as triangles.
+            const SEGMENTS: u32 = 48;
+            for k in 0..SEGMENTS {
+                let a0 = (k as f32 / SEGMENTS as f32) * std::f32::consts::TAU;
+                let a1 = ((k + 1) as f32 / SEGMENTS as f32) * std::f32::consts::TAU;
+                let hue = (k as f32 / SEGMENTS as f32) * 360.0;
+                let color = hsv_rgb(hue, 1.0, 1.0);
+                let dir0 = egui::vec2(a0.cos(), a0.sin());
+                let dir1 = egui::vec2(a1.cos(), a1.sin());
+                // Slightly overlap segments to avoid seams.
+                let p0 = center + dir0 * inner;
+                let p1 = center + dir0 * outer;
+                let p2 = center + dir1 * outer;
+                let p3 = center + dir1 * inner;
+                painter.add(egui::Shape::convex_polygon(
+                    vec![p0, p1, p2, p3],
+                    color,
+                    Stroke::NONE,
+                ));
+            }
+            painter.circle_filled(center, inner - 1.0, palette.card);
+            painter.circle_stroke(center, inner, Stroke::new(1.0, palette.border));
+
+            // Handle: angle from hue, radius from saturation.
+            let angle = value.hue.to_radians();
+            let radius = inner + (outer - inner) * (value.saturation.clamp(0.0, 100.0) / 100.0);
+            let handle = center + egui::vec2(angle.cos(), angle.sin()) * radius;
+            painter.circle_filled(handle, 6.0, Color32::WHITE);
+            painter.circle_stroke(handle, 6.0, Stroke::new(1.5, palette.accent));
+
+            if response.dragged() || response.clicked() {
+                if let Some(pointer) = response.interact_pointer_pos() {
+                    let delta = pointer - center;
+                    let dist = delta.length();
+                    if dist > 0.5 {
+                        let hue = delta.y.atan2(delta.x).to_degrees();
+                        value.hue = hue.rem_euclid(360.0);
+                    }
+                    value.saturation =
+                        (((dist - inner) / (outer - inner)) * 100.0).clamp(0.0, 100.0);
+                    changed = true;
+                }
+            }
+        });
+        ui.vertical(|ui| {
+            ui.label(RichText::new(label).size(11.0).color(palette.dim));
+            let tint = hsv_rgb(value.hue, (value.saturation / 100.0).clamp(0.0, 1.0), 1.0);
+            let (chip, _) = ui
+                .allocate_exact_size(Vec2::new(ui.available_width().min(16.0), 6.0), Sense::hover());
+            ui.painter().rect_filled(chip, CornerRadius::same(3), tint);
+            changed |= slider(ui, &mut value.luminance, -100.0..=100.0, 1.0, "Lum");
+        });
+    });
+    changed
 }
 
 /// Adwaita-styled labelled slider; returns true when the value changed.
@@ -301,13 +425,18 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, palette: Palette) -> Response {
     ghost_icon_button(ui, icon, palette, palette.text)
 }
 
-/// Accent-filled icon button, shadcn `primary`/`sm` style.
-pub fn accent_icon_button(ui: &mut Ui, icon: Icon, palette: Palette, on: bool) -> Response {
-    if on {
-        ghost_icon_button(ui, icon, palette, Color32::WHITE)
+/// Accent-filled icon button (shadcn `primary`/`sm`).
+pub fn accent_icon_button(ui: &mut Ui, icon: Icon, palette: Palette) -> Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(30.0), Sense::click());
+    let fill = if response.hovered() || response.is_pointer_button_down_on() {
+        palette.accent.gamma_multiply(1.12)
     } else {
-        ghost_icon_button(ui, icon, palette, palette.text)
-    }
+        palette.accent
+    };
+    ui.painter()
+        .rect_filled(rect, CornerRadius::same(8), fill);
+    paint_icon(ui, icon, rect.shrink(6.0), palette.on_accent);
+    response
 }
 
 fn ghost_icon_button(ui: &mut Ui, icon: Icon, palette: Palette, color: Color32) -> Response {

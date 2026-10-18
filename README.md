@@ -26,25 +26,30 @@ Browse:
 Edit (right-side adjust panel, RapidRAW-style layout):
 
 - Top toolbar with rotate ⟲/⟳ 90° steps, flip H/V, crop toggle, adjust toggle,
-  and an accent Export button (export itself is Phase 6); bottom bar with
-  filename, dimensions and file size
+  and an accent Export button (full-resolution JPEG + JSON sidecar); bottom bar
+  with filename, dimensions and file size
 - Crop tool: on-image overlay (dim outside, rule-of-thirds grid, corner grips,
   drag), aspect presets, free straightening, crop semantics handled in GPU
   geometry (shader.wgsl), Escape exits crop first
-- Color grading in a single WGSL pass shared by preview and export: sRGB →
-  linear, exposure, white balance (temperature + tint via Robertson +
-  Bradford), contrast/highlights/shadows/whites/blacks, hue, saturation,
-  vibrance, brightness with filmic-style mapping
+- Color grading in a single WGSL compute pass used by both the preview and the
+  export worker: sRGB → linear, exposure, white balance (temperature + tint via
+  Robertson + Bradford), contrast/highlights/shadows/whites/blacks, hue,
+  saturation, vibrance, brightness with filmic-style mapping
+- HSL mixer with eight hue ranges (red → magenta), each with hue / saturation /
+  luminance, plus 4-wheel split toning (shadows / midtones / highlights /
+  global) with master blending and balance
 - Core sliders: exposure, brightness, contrast, highlights, shadows, whites,
-  blacks, saturation, vibrance, hue, temperature, tint — batched as one 160 B
-  uniform per frame on the GPU
+  blacks, saturation, vibrance, hue, temperature, tint — packed into one 368 B
+  `ColorParams` uniform, rewritten when an edit changes (not every frame)
 - Per-image edits keyed on (path, base image, edit state); switching images
-  keeps its own grade
+  keeps its own grade. Edits live in memory for the session.
 - 3D LUT support: import `.cube` luts via a file dialog; they persist in
   `~/.cache/rust-gallery/luts` across launches, trilinear-sampled in the
   shader; the LUT section is the first section in the panel
+- Export: full-resolution decode, the same grade compute pass offscreen, GPU
+  readback, JPEG encode with a `.json` sidecar describing the recipe
 - Shadcn-aesthetic widgets: ghost/primary icon buttons with Lucide-style
-  painted icons, switches, sliders, combobox
+  painted icons, switches, sliders, color wheels
 
 Supported formats: JPEG, PNG, WebP, GIF (first frame), BMP, TIFF.
 
@@ -55,7 +60,7 @@ cargo run --release
 cargo run --release -- /path/to/photos
 ```
 
-Requires Rust 1.96+ (a `rust-toolchain.toml` pins this project to a recent
+Requires Rust 1.95+ (a `rust-toolchain.toml` pins this project to a recent
 stable; the system default toolchain is untouched) and a working Vulkan
 driver. The folder picker uses the desktop portal, which is available by
 default on GNOME.
@@ -83,7 +88,8 @@ Environment variables:
 | `NVJPEG_LIBRARY` | Explicit path to `libnvjpeg.so.13` |
 | `GALLERY_ZERO_COPY=0` | Disable the CUDA → Vulkan zero-copy path |
 
-Thumbnails are cached under `~/.cache/rust-gallery/thumbs`.
+Thumbnails are cached under `~/.cache/rust-gallery/thumbs`; imported LUTs live
+under `~/.cache/rust-gallery/luts`.
 
 ## Performance notes
 
@@ -98,24 +104,25 @@ context in a worker thread at app startup, so it does not block the UI.
 | --- | --- |
 | `Ctrl+O` | Open folder |
 | `Ctrl+F` | Focus search |
-| `Esc` | Clear search / leave viewer |
 | `←` `→` `↑` `↓` | Move grid selection; navigate in the viewer |
 | `Home` / `End` | First / last image |
 | `Enter` | Open the selected image |
 | `E` | Toggle the adjust panel |
-| `Esc` | Leave crop mode first, then leave the viewer |
+| `Esc` | Leave crop mode, then the adjust panel, then the viewer |
+| `Esc` (no viewer) | Clear search and drop focus |
 
 ## Design
 
 - `src/theme.rs` — Adwaita light/dark palettes, system theme detection, bundled Inter fonts, ppi snapping
 - `src/app.rs` — application state, layout, grid/viewer, keyboard handling, toolbar
-- `src/ui/edit_panel.rs` — right adjust panel (LUT / crop / grading sections), crop overlay
-- `src/ui/widgets.rs` — shadcn-aesthetic buttons/icons, switch, segmented control, search field
-- `src/grade/mod.rs` — `EditState` (crop/aspect/orientation/adjustments/LUT)
-- `src/grade/gpu.rs` — GradePass: WGSL grading compute pipeline, uniforms, LUT texture registry
-- `src/grade/shader.wgsl` — color pipeline + LSB/geometry, ported math from RapidRAW
+- `src/ui/edit_panel.rs` — right adjust panel (LUT / light / color / HSL / grading / crop), crop overlay
+- `src/ui/widgets.rs` — shadcn-aesthetic buttons/icons, switch, sliders, color wheels
+- `src/grade/mod.rs` — `EditState` (crop/aspect/orientation/adjustments/HSL/grading/LUT)
+- `src/grade/gpu.rs` — `GradeCore`/`GradePass`: WGSL grading compute pipeline, uniforms, LUT registry
+- `src/grade/shader.wgsl` — geometry + color pipeline, ported math from RapidRAW
 - `src/grade/wb.rs` — Robertson white balance f64 math (Bradford chromatic adaptation)
 - `src/crop.rs` — crop-rectangle math and straighten solve
+- `src/export.rs` — full-resolution export worker: decode → offscreen grade → readback → JPEG + sidecar
 - `src/luts.rs` — `.cube` parser, persistent LUT store, 3D texture upload
 - `src/scan.rs` — background directory scanning
 - `src/thumbs.rs` — thumbnail workers, disk cache, CPU image decoding
@@ -139,10 +146,11 @@ display texture. No image pixels cross PCIe or the CPU after decoding.
 
 ## Roadmap
 
-- HSL color mixer (8 color ranges) and 4-wheel split toning in the grade shader
-- Export with a GPU-resident pipeline: full-resolution decode → WGSL geometry + grade →
-  nvJPEG GPU encode from device memory (JPEG never crosses to the host), plus a per-image
-  sidecar JSON storing the edit recipe (Export button wiring lands here)
+- GPU nvJPEG export encode: hand the graded pixels to nvJPEG from device memory
+  (the export readback path is the current bottleneck) instead of CPU JPEG
+- Re-import the sidecar to restore a grade on a previously exported image
+- Live straighten preview inside crop mode (the preview shows the unrotated
+  frame; the angle applies on exit)
 - Full-resolution display textures: dedicated 100% viewing
 - Thumbnail cache size limit and cleanup
 - Remember last folder, window size, and theme between launches

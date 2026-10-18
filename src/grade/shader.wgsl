@@ -21,8 +21,29 @@ struct Params {
     flips: vec4<f32>,
 };
 
+// Per-range HSL mixer values (hue/saturation/luminance), 16-byte aligned as a
+// uniform array element requires.
+struct HslColor {
+    hue: f32,
+    saturation: f32,
+    luminance: f32,
+    _pad: f32,
+};
+
+// One color-grading wheel: hue degrees, saturation and luminance in shader
+// units (see grade/gpu.rs for the SCALES mirror).
+struct ColorGradeSettings {
+    hue: f32,
+    saturation: f32,
+    luminance: f32,
+    _pad: f32,
+};
+
 // Color grading parameters, pre-scaled in Rust (grade/gpu.rs holds the
 // scaling table mirrored from the reference implementation's SCALES map).
+// Byte offsets are mirrored by the offset constants in grade/gpu.rs; the
+// layout is `vec3<f32>` = 12 bytes, `mat3x3<f32>` = 3x16 bytes, uniform array
+// stride 16.
 struct ColorParams {
     exposure: f32,
     brightness: f32,
@@ -38,6 +59,11 @@ struct ColorParams {
     saturation: f32,
     vibrance: f32,
     has_lut: f32,
+    // Uniform array members must start on a 16-byte boundary.
+    @align(16) hsl: array<HslColor, 8>,
+    @align(16) color_grading: array<ColorGradeSettings, 4>,
+    grading_blending: f32,
+    grading_balance: f32,
 };
 
 @group(0) @binding(0) var<uniform> par: Params;
@@ -93,14 +119,17 @@ fn p_pipeline_to_texture(pipeline_pixel: vec2<f32>) -> vec2<f32> {
     }
     let steps = par.oriented.w;
     if (steps == 1.0) {
-        // Pipeline holds the texture rotated 90 degrees clockwise.
-        return vec2<f32>(coords.y, oriented.y - coords.x);
+        // Pipeline holds the texture rotated 90 degrees clockwise. The source
+        // width is the oriented height, so the inverse subtracts oriented.x.
+        return vec2<f32>(coords.y, oriented.x - coords.x);
     }
     if (steps == 2.0) {
         return vec2<f32>(oriented.x - coords.x, oriented.y - coords.y);
     }
     if (steps == 3.0) {
-        return vec2<f32>(oriented.x - coords.y, coords.x);
+        // 90 degrees counter-clockwise: the source width is the oriented
+        // height, so the inverse subtracts oriented.y.
+        return vec2<f32>(oriented.y - coords.y, coords.x);
     }
     return coords;
 }
@@ -112,13 +141,16 @@ fn p_oriented_size(texture_size: vec2<f32>) -> vec2<f32> {
     return texture_size;
 }
 
+// `texture_pixel` is in pixel-corner space (texel centres at i + 0.5); shift to
+// texel-index space before the bilinear taps so identity lands exactly on the
+// matching texel instead of halfway between two.
 fn p_sample_bilinear(texture_pixel: vec2<f32>) -> vec4<f32> {
     let dims = vec2<f32>(textureDimensions(src_tex));
-    let greatest = vec2<f32>(1.0, 1.0);
-    let max = dims - greatest;
-    let lower = floor(clamp(texture_pixel, vec2<f32>(0.0), max));
+    let max = dims - vec2<f32>(1.0, 1.0);
+    let p = clamp(texture_pixel - vec2<f32>(0.5, 0.5), vec2<f32>(0.0), max);
+    let lower = floor(p);
     let upper = clamp(lower + vec2<f32>(1.0, 1.0), vec2<f32>(0.0), max);
-    let texel = clamp(texture_pixel - lower, vec2<f32>(0.0), greatest);
+    let texel = clamp(p - lower, vec2<f32>(0.0), vec2<f32>(1.0, 1.0));
     let a = textureLoad(src_tex, vec2<i32>(lower), 0);
     let b = textureLoad(src_tex, vec2<i32>(vec2<f32>(upper.x, lower.y)), 0);
     let c = textureLoad(src_tex, vec2<i32>(vec2<f32>(lower.x, upper.y)), 0);
@@ -137,8 +169,10 @@ fn p_grade(sampled: vec4<f32>, coords: vec2<u32>) -> vec4<f32> {
     linear = p_white_balance(linear);
     linear = p_tonal(linear);
     linear = p_highlights(linear);
+    linear = p_hsl(linear);
     linear = p_hue_shift(linear);
     linear = p_creative_color(linear);
+    linear = p_color_grading(linear);
     var srgb = p_linear_to_srgb(linear);
     srgb = p_filmic_exposure(srgb);
     srgb = p_lut(srgb);
@@ -462,6 +496,136 @@ fn p_creative_color(color: vec3<f32>) -> vec3<f32> {
 
     processed = mix(vec3<f32>(luma), processed, final_mult);
     return max(processed, vec3<f32>(0.0));
+}
+
+// ---------------------------------------------------------------------------
+// HSL mixer and color grading, ported from the referenced RapidRAW shader.
+// ---------------------------------------------------------------------------
+
+// Hue centres and widths of the eight mixer ranges, matching the reference.
+const HSL_CENTERS: array<f32, 8> = array<f32, 8>(
+    358.0, 25.0, 60.0, 115.0, 180.0, 225.0, 280.0, 330.0
+);
+const HSL_WIDTHS: array<f32, 8> = array<f32, 8>(
+    35.0, 45.0, 40.0, 90.0, 60.0, 60.0, 55.0, 50.0
+);
+
+fn p_raw_hsl_influence(hue: f32, center: f32, width: f32) -> f32 {
+    let dist = min(abs(hue - center), 360.0 - abs(hue - center));
+    const sharpness: f32 = 1.5;
+    let falloff = dist / (width * 0.5);
+    return exp(-sharpness * falloff * falloff);
+}
+
+// Eight-range HSL mixer: each pixel's hue picks up a normalized blend of the
+// range adjustments, with saturation and luminance weighted separately.
+fn p_hsl(color: vec3<f32>) -> vec3<f32> {
+    var has_adjustments = false;
+    for (var i = 0u; i < 8u; i = i + 1u) {
+        let entry = col.hsl[i];
+        if (abs(entry.hue) > 0.0001
+            || abs(entry.saturation) > 0.0001
+            || abs(entry.luminance) > 0.0001) {
+            has_adjustments = true;
+            break;
+        }
+    }
+    if (!has_adjustments) {
+        return color;
+    }
+
+    let safe_color = max(color, vec3<f32>(0.0));
+    if (abs(safe_color.r - safe_color.g) < 0.001 && abs(safe_color.g - safe_color.b) < 0.001) {
+        return safe_color;
+    }
+    let original_hsv = rgb_to_hsv(linear_to_srgb_extended(safe_color));
+    let original_luma = get_luma(safe_color);
+
+    let saturation_mask = smoothstep(0.05, 0.20, original_hsv.y);
+    let luminance_weight = smoothstep(0.0, 1.0, original_hsv.y);
+    if (saturation_mask < 0.001 && luminance_weight < 0.001) {
+        return safe_color;
+    }
+
+    let original_hue = original_hsv.x;
+    var raw_influences: array<f32, 8>;
+    var total_raw_influence: f32 = 0.0;
+    for (var i = 0u; i < 8u; i = i + 1u) {
+        let influence = p_raw_hsl_influence(original_hue, HSL_CENTERS[i], HSL_WIDTHS[i]);
+        raw_influences[i] = influence;
+        total_raw_influence += influence;
+    }
+
+    var total_hue_shift: f32 = 0.0;
+    var total_sat_multiplier: f32 = 0.0;
+    var total_lum_adjust: f32 = 0.0;
+    for (var i = 0u; i < 8u; i = i + 1u) {
+        let normalized_influence = raw_influences[i] / total_raw_influence;
+        let entry = col.hsl[i];
+        total_hue_shift += entry.hue * 2.0 * normalized_influence * saturation_mask;
+        total_sat_multiplier += entry.saturation * normalized_influence * saturation_mask;
+        total_lum_adjust += entry.luminance * normalized_influence * luminance_weight;
+    }
+
+    if (original_hsv.y * (1.0 + total_sat_multiplier) < 0.0001) {
+        let final_luma = original_luma * (1.0 + total_lum_adjust);
+        return vec3<f32>(final_luma);
+    }
+    var hsv = original_hsv;
+    hsv.x = (hsv.x + total_hue_shift + 360.0) % 360.0;
+    hsv.y = clamp(hsv.y * (1.0 + total_sat_multiplier), 0.0, 1.0);
+    let hs_shifted_rgb = p_srgb_to_linear(hsv_to_rgb(vec3<f32>(hsv.x, hsv.y, original_hsv.z)));
+    let new_luma = get_luma(hs_shifted_rgb);
+    let target_luma = original_luma * (1.0 + total_lum_adjust);
+    if (new_luma < 0.0001) {
+        return vec3<f32>(max(0.0, target_luma));
+    }
+    return hs_shifted_rgb * (target_luma / new_luma);
+}
+
+// Four-way split toning: shadow/midtone/highlight/global wheels tint and lift
+// luminance through smooth crossovers shaped by blending and balance.
+fn p_color_grading(color: vec3<f32>) -> vec3<f32> {
+    let luma = get_luma(max(vec3<f32>(0.0), color));
+    let base_shadow_crossover = 0.1;
+    let base_highlight_crossover = 0.5;
+    let balance_range = 0.5;
+    let balance = col.grading_balance;
+    let shadow_crossover = base_shadow_crossover + max(0.0, -balance) * balance_range;
+    let highlight_crossover = base_highlight_crossover - max(0.0, balance) * balance_range;
+    let feather = 0.2 * col.grading_blending;
+    let final_shadow_crossover = min(shadow_crossover, highlight_crossover - 0.01);
+    let shadow_mask = 1.0 - smoothstep(final_shadow_crossover - feather, final_shadow_crossover + feather, luma);
+    let highlight_mask = smoothstep(highlight_crossover - feather, highlight_crossover + feather, luma);
+    let midtone_mask = max(0.0, 1.0 - shadow_mask - highlight_mask);
+
+    let shadow = col.color_grading[0];
+    let midtone = col.color_grading[1];
+    let highlight = col.color_grading[2];
+    let global = col.color_grading[3];
+
+    var graded = color;
+    if (shadow.saturation > 0.001) {
+        let tint = hsv_to_rgb(vec3<f32>(shadow.hue, 1.0, 1.0));
+        graded += (tint - 0.5) * shadow.saturation * shadow_mask * 0.1;
+    }
+    graded += shadow.luminance * shadow_mask * 0.5;
+    if (midtone.saturation > 0.001) {
+        let tint = hsv_to_rgb(vec3<f32>(midtone.hue, 1.0, 1.0));
+        graded += (tint - 0.5) * midtone.saturation * midtone_mask * 0.6;
+    }
+    graded += midtone.luminance * midtone_mask * 0.8;
+    if (highlight.saturation > 0.001) {
+        let tint = hsv_to_rgb(vec3<f32>(highlight.hue, 1.0, 1.0));
+        graded += (tint - 0.5) * highlight.saturation * highlight_mask * 0.8;
+    }
+    graded += highlight.luminance * highlight_mask * 1.0;
+    if (global.saturation > 0.001) {
+        let tint = hsv_to_rgb(vec3<f32>(global.hue, 1.0, 1.0));
+        graded += (tint - 0.5) * global.saturation * 1.0;
+    }
+    graded += global.luminance * 1.0;
+    return graded;
 }
 
 // Filmic brightness on the sRGB-encoded tone: a rational curve on luma with

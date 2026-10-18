@@ -48,8 +48,12 @@ pub struct GalleryApp {
     pub(crate) crop_active: bool,
     pub(crate) crop_drag: Option<crate::crop::CropDrag>,
     pub(crate) lut_names: Vec<String>,
+    /// Selected hue range in the HSL mixer (index into `grade::HSL_NAMES`).
+    pub(crate) hsl_range: usize,
     pub(crate) edits: HashMap<PathBuf, EditState>,
     pub(crate) grade: GradePass,
+    export_rx: Option<Receiver<crate::export::ExportOutcome>>,
+    exporting: bool,
     toast: Option<Toast>,
     pending_open: Option<PathBuf>,
     last_search: String,
@@ -180,12 +184,15 @@ impl GalleryApp {
             crop_active: false,
             crop_drag: None,
             lut_names: Vec::new(),
+            hsl_range: 0,
             edits: HashMap::new(),
             grade: GradePass::new(
                 cc.wgpu_render_state
                     .as_ref()
                     .expect("wgpu render state is available with the wgpu renderer"),
             ),
+            export_rx: None,
+            exporting: false,
             toast: None,
             pending_open: None,
             last_search: String::new(),
@@ -444,11 +451,6 @@ impl GalleryApp {
     }
 
     fn handle_keys(&mut self, ctx: &egui::Context) {
-        log::debug!(
-            "handle_keys focus={} escape={}",
-            ctx.memory(|m| m.focused().is_some()),
-            ctx.input(|i| i.key_pressed(egui::Key::Escape))
-        );
         let open_shortcut = ctx
             .input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::O));
         if open_shortcut {
@@ -547,7 +549,6 @@ impl GalleryApp {
         if !self.edit_panel_open {
             self.crop_active = false;
             self.crop_drag = None;
-            self.grade.release();
         }
     }
 
@@ -649,8 +650,8 @@ impl GalleryApp {
                             theme::apply(ui.ctx(), self.palette);
                         }
                         if self.viewer_open
-                            && w::accent_icon_button(ui, Icon::Download, palette, false)
-                                .on_hover_text("Export (planned: GPU nvJPEG)")
+                            && w::accent_icon_button(ui, Icon::Download, palette)
+                                .on_hover_text("Export the edited image")
                                 .clicked()
                         {
                             self.begin_export();
@@ -697,8 +698,50 @@ impl GalleryApp {
     }
 
     fn begin_export(&mut self) {
-        // Phase 6: GPU nvJPEG export pipeline. The sidecar/settings UI lands there.
-        log::info!("export requested (pending Phase 6 hook)");
+        if self.exporting {
+            self.show_toast("An export is already running".to_owned(), false);
+            return;
+        }
+        let Some(index) = self.visible.get(self.viewer_index).copied() else {
+            return;
+        };
+        let path = self.all_items[index].path.clone();
+        let edit = self.edits.get(&path).cloned().unwrap_or_default();
+        self.export_rx = Some(crate::export::spawn(
+            self.grade.device(),
+            self.grade.queue(),
+            path,
+            edit,
+        ));
+        self.exporting = true;
+        self.show_toast("Exporting full-resolution JPEG…".to_owned(), false);
+    }
+
+    fn poll_export(&mut self) {
+        let Some(rx) = &self.export_rx else {
+            return;
+        };
+        let Ok(outcome) = rx.try_recv() else {
+            return;
+        };
+        self.export_rx = None;
+        self.exporting = false;
+        match outcome.result {
+            Ok(paths) => {
+                let name = paths
+                    .image
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                log::info!(
+                    "exported {name} + {} in {:.0} ms",
+                    paths.sidecar.display(),
+                    outcome.elapsed.as_secs_f64() * 1000.0
+                );
+                self.show_toast(format!("Exported {name} + sidecar"), false);
+            }
+            Err(error) => self.show_toast(format!("Export failed: {error}"), true),
+        }
     }
 
     fn bottom_info_bar(&mut self, ui: &mut egui::Ui) {
@@ -1214,10 +1257,11 @@ impl GalleryApp {
             self.thumbs.request(&item.path);
         }
 
-        // Route through the grade pass when the panel is open.
+        // Route through the grade pass whenever the image has edits, whether or
+        // not the panel is open, so adjustments stay visible after closing it.
         let mut texture_id = full_texture;
         let mut drawn_size = dimensions.map(|d| Vec2::new(d[0] as f32, d[1] as f32));
-        if self.edit_panel_open && full_texture.is_some() && dimensions.is_some() {
+        if full_texture.is_some() && dimensions.is_some() {
             let base = self.viewer.base_texture(&item.path, target);
             if let Some((base_id, base_view, base_size)) = base {
                 let source = dimensions.unwrap();
@@ -1385,21 +1429,22 @@ impl eframe::App for GalleryApp {
         self.thumbs.poll(&ctx);
         self.viewer.poll();
         self.poll_scan();
+        self.poll_export();
         self.handle_keys(&ctx);
 
         self.top_bar(ui);
         if self.show_sidebar {
             self.sidebar(ui);
         }
+        self.bottom_info_bar(ui);
         if self.viewer_open && self.edit_panel_open {
             crate::ui::edit_panel::show(self, ui);
         }
-        self.bottom_info_bar(ui);
         self.central(ui);
         self.sync_filters();
         self.toast(&ctx);
 
-        if self.scanning || self.viewer.loading || self.thumbs.busy() {
+        if self.scanning || self.viewer.loading || self.thumbs.busy() || self.exporting {
             ctx.request_repaint_after(Duration::from_millis(60));
         }
     }

@@ -148,7 +148,6 @@ impl CropGeom {
     /// Adjust the sides of `crop` to `aspect` (width/height) about its center,
     /// keeping it valid and at least MIN_CROP_PX on the long side. Used by the
     /// aspect preset buttons and tested from the unit suite.
-    #[allow(dead_code)]
     pub fn apply_aspect(&self, crop: CropRect, aspect: f32) -> CropRect {
         let center = [crop.x + crop.w * 0.5, crop.y + crop.h * 0.5];
         let mut candidate = if crop.w / crop.h > aspect {

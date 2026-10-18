@@ -7,7 +7,7 @@
 
 use crate::app::GalleryApp;
 use crate::crop::{CropDrag, CropGeom};
-use crate::grade::EditState;
+use crate::grade::{CropRect, EditState};
 use crate::theme;
 use crate::ui::widgets as w;
 use egui::{CollapsingHeader, Color32, Frame, Margin, Rect, RichText, Ui};
@@ -48,11 +48,9 @@ fn panel_content(app: &mut GalleryApp, ui: &mut Ui) {
     lut_section(app, &path, ui);
     light_section(app, &path, ui);
     color_section(app, &path, ui);
+    hsl_section(app, &path, ui);
+    grading_section(app, &path, ui);
     crop_section(app, &path, ui);
-    later_sections(ui, palette, [
-        ("HSL Color Mixer", "Eight color ranges arrive in a later phase."),
-        ("Color Grading", "Four grading wheels arrive in a later phase."),
-    ]);
 
     ui.add_space(10.0);
     if w::accent_button(ui, "Reset all", palette).clicked() {
@@ -193,20 +191,23 @@ fn crop_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
                 ];
                 for (label, ratio) in presets {
                     let selected = state.aspect == ratio;
-                    if w::flat_button(ui, label, palette).clicked() {
+                    if w::toggle_button(ui, label, selected, palette).clicked() {
                         app.crop_drag = None;
                         let state = app.edits.get_mut(path).unwrap();
-                        state.aspect = ratio;
-                        let geom = crate::crop::CropGeom {
+                        let geometry = CropGeom {
                             oriented: oriented_f32,
                             rotation_deg: state.rotation,
                         };
-                        state.crop = Some(match ratio {
-                            Some(ratio) => geom.centered(Some(ratio)),
-                            None => geom.centered(None),
-                        });
+                        // Preserve the current frame instead of resetting it:
+                        // re-fit an aspect change and re-validate for straighten.
+                        let base = state.crop.unwrap_or_else(|| geometry.centered(None));
+                        state.aspect = ratio;
+                        let next = match ratio {
+                            Some(ratio) => geometry.apply_aspect(base, ratio),
+                            None => geometry.fit(base),
+                        };
+                        normalize_crop(state, &geometry, next);
                     }
-                    let _ = selected;
                 }
             });
 
@@ -219,10 +220,8 @@ fn crop_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
                 };
                 let state = app.edits.get_mut(path).unwrap();
                 state.rotation = rotation;
-                let base = state.crop.unwrap_or_else(|| {
-                    geometry.centered(state.aspect)
-                });
-                state.crop = Some(geometry.fit(base));
+                let base = state.crop.unwrap_or_else(|| geometry.centered(state.aspect));
+                normalize_crop(state, &geometry, geometry.fit(base));
             }
 
             ui.add_space(4.0);
@@ -236,7 +235,8 @@ fn crop_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
         });
 }
 
-fn light_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {    CollapsingHeader::new(RichText::new("Light").size(12.5))
+fn light_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
+    CollapsingHeader::new(RichText::new("Light").size(12.5))
         .default_open(true)
         .show(ui, |ui| {
             let adjustments =
@@ -281,7 +281,7 @@ pub fn crop_overlay(app: &mut GalleryApp, ui: &mut Ui, rect: Rect, source: [f32;
         oriented: oriented.map(|axis| axis as f32),
         rotation_deg: state.rotation,
     };
-    let mut crop = state.crop.unwrap_or_else(|| geometry.centered(None));
+    let mut crop = state.crop.unwrap_or_else(|| geometry.fit(geometry.centered(state.aspect)));
 
     // The drawn texture is the full oriented frame (crop preview mode), so
     // the same scale applies on both axes because the fit preserves aspect.
@@ -397,7 +397,7 @@ pub fn crop_overlay(app: &mut GalleryApp, ui: &mut Ui, rect: Rect, source: [f32;
         app.crop_drag = None;
     }
 
-    state.crop = Some(crop);
+    normalize_crop(&mut state, &geometry, crop);
     *app.edits.entry(path).or_default() = state;
     if let Some(pending) = drag {
         if response.dragged() {
@@ -428,15 +428,55 @@ fn screen_to_source(pointer: egui::Pos2, rect: Rect, scale: f32) -> [f32; 2] {
     ]
 }
 
-fn later_sections(
-    ui: &mut Ui,
-    palette: crate::theme::Palette,
-    sections: [(&str, &str); 2],
-) {    for (title, hint) in sections {
-        CollapsingHeader::new(RichText::new(title).size(12.5))
-            .default_open(false)
-            .show(ui, |ui| {
-                ui.label(RichText::new(hint).size(11.5).color(palette.dim));
+/// Store a crop, collapsing an unrotated full-frame rectangle back to `None`
+/// so merely opening the crop tool does not register as an edit. When the
+/// straighten angle is non-zero a fitted rectangle must be kept so the grade
+/// pass never samples outside the rotated frame.
+fn normalize_crop(state: &mut EditState, geometry: &CropGeom, crop: CropRect) {
+    let default_full = state.rotation == 0.0 && crop == geometry.centered(state.aspect);
+    state.crop = if default_full { None } else { Some(crop) };
+}
+
+/// Eight-range HSL mixer: a hue-range chip row plus hue/saturation/luminance
+/// sliders for the selected range.
+fn hsl_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
+    let palette = app.palette;
+    CollapsingHeader::new(RichText::new("HSL Mixer").size(12.5))
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for (index, name) in crate::grade::HSL_NAMES.iter().enumerate() {
+                    let selected = app.hsl_range == index;
+                    if w::toggle_button(ui, name, selected, palette).clicked() {
+                        app.hsl_range = index;
+                    }
+                }
             });
-    }
+            let index = app.hsl_range.min(crate::grade::HSL_NAMES.len() - 1);
+            ui.add_space(4.0);
+            let range = &mut app.edits.entry(path.clone()).or_default().adjustments.hsl[index];
+            let _ = w::slider(ui, &mut range.hue, -100.0..=100.0, 1.0, "Hue");
+            let _ = w::slider(ui, &mut range.saturation, -100.0..=100.0, 1.0, "Saturation");
+            let _ = w::slider(ui, &mut range.luminance, -100.0..=100.0, 1.0, "Luminance");
+        });
+}
+
+/// Four-way split toning / color grading: shadow, midtone, highlight and global
+/// wheels with master blending and balance.
+fn grading_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
+    let palette = app.palette;
+    CollapsingHeader::new(RichText::new("Color Grading").size(12.5))
+        .default_open(false)
+        .show(ui, |ui| {
+            let grading =
+                &mut app.edits.entry(path.clone()).or_default().adjustments.color_grading;
+            const LABELS: [&str; 4] = ["Shadows", "Midtones", "Highlights", "Global"];
+            for (index, label) in LABELS.iter().enumerate() {
+                let _ = w::color_wheel(ui, &mut grading.wheels[index], label, palette);
+                ui.add_space(2.0);
+            }
+            ui.add_space(4.0);
+            let _ = w::slider(ui, &mut grading.blending, 0.0..=100.0, 1.0, "Blending");
+            let _ = w::slider(ui, &mut grading.balance, -100.0..=100.0, 1.0, "Balance");
+        });
 }

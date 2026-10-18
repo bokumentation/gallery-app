@@ -1,5 +1,6 @@
 mod app;
 mod crop;
+mod export;
 mod grade;
 mod model;
 mod nvjpeg;
