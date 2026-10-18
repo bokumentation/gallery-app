@@ -70,6 +70,9 @@ fn main() -> eframe::Result<()> {
         renderer: eframe::Renderer::Wgpu,
         wgpu_options,
         centered: true,
+        // egui feather-antialiases geometry already; 4x MSAA additionally
+        // smooths the image quads and costs little on this GPU.
+        multisampling: 4,
         ..Default::default()
     };
 

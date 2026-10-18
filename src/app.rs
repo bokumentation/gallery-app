@@ -131,6 +131,14 @@ fn has_subdirs(path: &Path) -> bool {
 impl GalleryApp {
     pub fn new(cc: &eframe::CreationContext<'_>, start_dir: Option<PathBuf>) -> Self {
         theme::install_fonts(&cc.egui_ctx);
+        // Snap to a quarter-point grid: fractional scale factors (1.25, 1.5,
+        // 1.75) stay exact but float noise like 1.2500001 stops leaking into
+        // the font atlas, which keeps glyph rendering crisp.
+        let native_ppp = cc.egui_ctx.native_pixels_per_point().unwrap_or(1.0);
+        if native_ppp > 0.0 {
+            cc.egui_ctx
+                .set_pixels_per_point((native_ppp * 4.0).round() / 4.0);
+        }
         let theme_mode = ThemeMode::System;
         let palette = Palette::from_mode(theme_mode);
         theme::apply(&cc.egui_ctx, palette);

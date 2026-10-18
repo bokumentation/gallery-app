@@ -2,7 +2,6 @@ use egui::{
     Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Margin, Stroke, TextStyle,
     Visuals,
 };
-use std::path::Path;
 use std::sync::Arc;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -124,114 +123,31 @@ impl Palette {
     }
 }
 
+/// Bundled Inter faces (SIL OFL 1.1) — the UI renders the same everywhere,
+/// without a runtime scan of the user's font folders.
+const INTER_REGULAR: &[u8] = include_bytes!("../assets/fonts/Inter_18pt-Regular.ttf");
+const INTER_SEMIBOLD: &[u8] = include_bytes!("../assets/fonts/Inter_18pt-SemiBold.ttf");
+
 pub fn install_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
-    let available = system_font_files();
 
-    let regular = pick_font(
-        &available,
-        &[
-            "Inter_18pt-Regular.ttf",
-            "Inter-Regular.ttf",
-            "AdwaitaSans-Regular.ttf",
-            "Cantarell-Regular.ttf",
-            "Ubuntu-R.ttf",
-        ],
+    fonts.font_data.insert(
+        "gallery-ui".to_owned(),
+        Arc::new(FontData::from_owned(INTER_REGULAR.to_vec())),
     );
-
-    let bold = pick_font(
-        &available,
-        &[
-            "Inter_18pt-SemiBold.ttf",
-            "Inter_18pt-Bold.ttf",
-            "Inter-Bold.ttf",
-            "AdwaitaSans-Bold.ttf",
-            "Cantarell-Bold.ttf",
-        ],
+    fonts.font_data.insert(
+        "gallery-bold".to_owned(),
+        Arc::new(FontData::from_owned(INTER_SEMIBOLD.to_vec())),
     );
-
-    if let Some(path) = regular {
-        if let Ok(bytes) = std::fs::read(path) {
-            fonts
-                .font_data
-                .insert("gallery-ui".to_owned(), Arc::new(FontData::from_owned(bytes)));
-            if let Some(family) = fonts.families.get_mut(&FontFamily::Proportional) {
-                family.insert(0, "gallery-ui".to_owned());
-            }
-        }
+    if let Some(family) = fonts.families.get_mut(&FontFamily::Proportional) {
+        family.insert(0, "gallery-ui".to_owned());
     }
-
-    if let Some(path) = bold {
-        if let Ok(bytes) = std::fs::read(path) {
-            fonts
-                .font_data
-                .insert("gallery-bold".to_owned(), Arc::new(FontData::from_owned(bytes)));
-            fonts.families.insert(
-                FontFamily::Name("gallery-bold".into()),
-                vec!["gallery-bold".to_owned(), "gallery-ui".to_owned()],
-            );
-        }
-    }
-
-    if !fonts.families.contains_key(&FontFamily::Name("gallery-bold".into())) {
-        fonts.families.insert(
-            FontFamily::Name("gallery-bold".into()),
-            vec!["gallery-ui".to_owned()],
-        );
-    }
+    fonts.families.insert(
+        FontFamily::Name("gallery-bold".into()),
+        vec!["gallery-bold".to_owned(), "gallery-ui".to_owned()],
+    );
 
     ctx.set_fonts(fonts);
-}
-
-fn system_font_files() -> Vec<std::path::PathBuf> {
-    let mut roots = Vec::new();
-    if let Some(dir) = dirs::data_local_dir() {
-        roots.push(dir.join("fonts"));
-    }
-    if let Some(dir) = dirs::home_dir() {
-        roots.push(dir.join(".local/share/fonts"));
-        roots.push(dir.join(".fonts"));
-    }
-    roots.push(std::path::PathBuf::from("/usr/local/share/fonts"));
-    roots.push(std::path::PathBuf::from("/usr/share/fonts"));
-
-    let mut files = Vec::new();
-    for root in roots {
-        if !root.is_dir() {
-            continue;
-        }
-        for entry in walkdir::WalkDir::new(root)
-            .max_depth(4)
-            .follow_links(false)
-            .into_iter()
-            .flatten()
-        {
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            let name = entry.file_name().to_string_lossy();
-            if name.ends_with(".ttf") || name.ends_with(".otf") {
-                files.push(entry.into_path());
-            }
-        }
-    }
-    files
-}
-
-fn pick_font<'a>(
-    files: &'a [std::path::PathBuf],
-    names: &[&str],
-) -> Option<&'a Path> {
-    names.iter().find_map(|name| {
-        files
-            .iter()
-            .find(|path| {
-                path.file_name()
-                    .map(|file| file.to_string_lossy() == *name)
-                    .unwrap_or(false)
-            })
-            .map(|path| path.as_path())
-    })
 }
 
 pub fn bold_font(size: f32) -> FontId {
