@@ -1623,15 +1623,36 @@ impl GalleryApp {
                                 ui, cell_rect, &response, palette, thumbnail, &name, selected,
                             );
 
-                            if selected && scroll_to {
-                                ui.scroll_to_rect(cell_rect, Some(Align::Center));
-                            }
-
                             if response.double_clicked() {
                                 open_request = Some(index);
                             } else if response.clicked() {
                                 select_request = Some(index);
                             }
+                        }
+                    }
+
+                    // Scroll to the selected cell even when it is outside the
+                    // rows currently rendered. The old in-loop call only ran
+                    // for visible cells, so holding an arrow key let the
+                    // selection (and its ring) run off-screen.
+                    if scroll_to {
+                        if let Some(selected) = selection {
+                            let row = selected / columns;
+                            let column = selected % columns;
+                            let top = base.top() + (row as f32 - first_row as f32) * row_stride;
+                            let left = base.left()
+                                + metrics.grid_pad
+                                + column as f32 * (cell_width + metrics.grid_gap);
+                            let target =
+                                Rect::from_min_size(egui::pos2(left, top), Vec2::splat(cell_width));
+                            ui.scroll_to_rect_animation(
+                                target,
+                                Some(Align::Center),
+                                egui::style::ScrollAnimation::new(
+                                    3000.0,
+                                    egui::Rangef::new(0.04, 0.08),
+                                ),
+                            );
                         }
                     }
                 });
