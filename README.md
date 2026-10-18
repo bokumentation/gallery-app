@@ -3,6 +3,48 @@
 A fast, compact VS Code / Zed-style image gallery and editor built with Rust,
 egui 0.37, and wgpu/Vulkan. The palette follows the in-tree shadcn zinc tokens.
 
+## How it works
+
+Gallery keeps the expensive browsing work off the UI thread. Scanning,
+thumbnail decoding, full-image decoding, export and clipboard work run on
+workers and report back through channels; the UI only handles input, layout,
+painting and small control actions.
+
+- **Scanning** — directory scans run on a dedicated worker with a generation
+  counter. Changing folders or typing a search discards stale results instead
+  of blocking the next frame.
+- **Virtualized grid** — only the visible rows are laid out and painted. A
+  thumbnail is requested only when its cell is actually drawn.
+- **Thumbnail cache** — 2–8 worker threads decode 512 px thumbnails into an
+  in-memory LRU and a persistent disk cache under `~/.cache/rust-gallery`.
+- **Viewer pipeline** — two persistent workers handle the current image and
+  prefetch the next one. The cached thumbnail appears immediately while the
+  full-resolution decode is in flight; superseded requests are dropped.
+- **GPU textures** — decoded images stay on the GPU. The viewer cache is
+  budgeted at 1.2 GB / 32 entries, so returning to a recent image is instant
+  and does not re-decode it.
+- **One grade pass** — orientation, flips, crop, straighten, white balance,
+  tone, HSL, split toning and LUT sampling run in one WGSL compute dispatch.
+  The 368 B parameter uniform is rewritten only when the edit changes, and the
+  preview and export share the same `GradeCore` code.
+- **Zero-copy JPEG** — when supported, nvJPEG writes into CUDA-imported Vulkan
+  memory, a compute pass converts RGB to RGBA, and egui samples the result
+  directly. Image pixels do not make a CPU or PCIe round-trip after decode.
+- **Export and clipboard** — both use the same full-resolution decode and GPU
+  grade path. Export encodes a JPEG plus sidecar; clipboard copy reads back RGBA
+  and hands it to the system clipboard without writing a temporary file.
+
+The short version: virtualize the grid, cache aggressively, keep textures on
+the GPU, avoid per-frame uniform/uploads, and never block egui.
+
+> **Tested on:** Debian 13 GNOME on a laptop with an Intel Core i5-12450HX
+> (integrated graphics) and an NVIDIA GeForce RTX 2050. The app prefers the
+> discrete Vulkan adapter, then Intel Vulkan, OpenGL, and CPU fallbacks. Other
+> distributions and GPUs should work, but are not actively tested.
+
+See [`docs/ARCHITECTURES.md`](docs/ARCHITECTURES.md) for the detailed pipeline
+and the concrete performance rules.
+
 ## Features
 
 Browse:
@@ -82,33 +124,76 @@ Edit (VS Code / Zed-style compact workspace):
 
 Supported formats: JPEG, PNG, WebP, GIF (first frame), BMP, TIFF.
 
+## Documentation
+
+- [Architecture and fast paths](docs/ARCHITECTURES.md) — threading, caching,
+  the GPU grade pass, zero-copy JPEG and the rules that keep the UI snappy.
+- [Roadmap](docs/ROADMAP.md) — planned performance, editing and library work.
+
 ## Build and run
 
+### Requirements
+
+- Linux with a Wayland or X11 session. Debian 13 GNOME is the tested setup.
+- Rust 1.95 or newer with Cargo. Use `rustup`; the repository’s
+  `rust-toolchain.toml` selects stable automatically and leaves the system
+  toolchain untouched.
+- A working Vulkan driver. The app prefers a discrete Vulkan adapter, then
+  Intel/AMD Vulkan, then OpenGL, then CPU decoding.
+- The XDG desktop portal for the folder picker. GNOME ships a working backend
+  by default.
+- `libvulkan1` (Vulkan loader) and `libgl1` (OpenGL fallback) at runtime.
+
+On Debian 13, the base packages are:
+
 ```bash
-cargo run --release
-cargo run --release -- /path/to/photos
+sudo apt install build-essential pkg-config libvulkan1 \
+  mesa-vulkan-drivers libgl1 xdg-desktop-portal-gnome
 ```
 
-Requires Rust 1.95+ (a `rust-toolchain.toml` pins this project to a recent
-stable; the system default toolchain is untouched) and a working Vulkan
-driver. The folder picker uses the desktop portal, which is available by
-default on GNOME.
+Install the appropriate GPU driver for your hardware. For the tested RTX 2050,
+that is the current NVIDIA proprietary driver; Intel graphics use Mesa’s
+Vulkan driver.
 
-For CUDA/nvJPEG acceleration, an NVIDIA driver and the nvJPEG runtime are
-needed. Install it system-wide:
+Optional CUDA/nvJPEG acceleration needs an NVIDIA driver and the nvJPEG runtime
+from the NVIDIA CUDA repository. Install the runtime system-wide:
 
 ```bash
 sudo apt install libnvjpeg-13-1 libnvjpeg-dev-13-1
 ```
 
-or without sudo, into `~/.local/lib/rust-gallery`:
+or, without root, extract it into `~/.local/lib/rust-gallery`:
 
 ```bash
 ./scripts/install-nvjpeg-local.sh
 ```
 
 The app probes nvJPEG and the Vulkan external-memory path at runtime. If either
-is unavailable it falls back to the CUDA/host path, then to CPU decoding.
+is unavailable it falls back to the CUDA/host path, then to CPU decoding. The
+CUDA toolkit is not required to build.
+
+Rust dependencies (exact versions live in `Cargo.toml`):
+
+| Area | Crates |
+| --- | --- |
+| UI | `eframe`, `egui`, `egui-wgpu` 0.37 |
+| GPU | `wgpu` 30, `wgpu-hal`, `ash` |
+| Images | `image` 0.25, `cudarc` (optional nvJPEG/CUDA loader) |
+| Infrastructure | `crossbeam-channel`, `lru`, `walkdir`, `rfd`, `dirs` |
+| Diagnostics | `log`, `env_logger` |
+
+Fonts are bundled Inter faces; there is no icon-font or shadcn crate
+dependency.
+
+### Build
+
+```bash
+cargo run --release
+cargo run --release -- /path/to/photos
+```
+
+A release build is strongly recommended: image decode, shader compilation and
+thumbnail generation are noticeably slower in debug builds.
 
 Environment variables:
 
@@ -201,23 +286,10 @@ on the discrete GPU and falls back to OpenGL only if Vulkan is unavailable.
 Viewer navigation is handled by two persistent workers (current image and
 prefetch). New requests supersede queued ones, stale results are discarded, and
 the viewer immediately shows the cached thumbnail while the full image loads.
-Decoded images are cached as persistent GPU textures with a byte budget, so
+Decoded images are cached as GPU textures with a byte budget, so
 moving back to a previously viewed image is instant.
 
 When the zero-copy path is active, nvJPEG writes RGB data into a Vulkan buffer
 whose memory was imported into CUDA. The buffer is wrapped as a wgpu storage
 buffer, a compute shader expands RGB to RGBA, and the result is copied into the
 display texture. No image pixels cross PCIe or the CPU after decoding.
-
-## Roadmap
-
-- Zoom-aware full-resolution display: dedicated 100% viewing beyond the 4096 px
-  decode cap
-- GPU nvJPEG export encode: hand the graded pixels to nvJPEG from device memory
-  (the export readback path is the current bottleneck) instead of CPU JPEG
-- Re-import the sidecar to restore a grade on a previously exported image
-- Live straighten preview inside crop mode (the preview shows the unrotated
-  frame; the angle applies on exit)
-- Thumbnail cache size limit and cleanup
-- Remember last folder, window size, and theme between launches
-- Optional `theme.toml` runtime overrides for the compile-time tokens
