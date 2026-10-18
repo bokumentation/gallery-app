@@ -56,6 +56,7 @@ pub struct GalleryApp {
     pub(crate) grade: GradePass,
     export_rx: Option<Receiver<crate::export::ExportOutcome>>,
     exporting: bool,
+    reveal_rx: Option<Receiver<Result<(), String>>>,
     toast: Option<Toast>,
     pending_open: Option<PathBuf>,
     last_search: String,
@@ -196,6 +197,7 @@ impl GalleryApp {
             ),
             export_rx: None,
             exporting: false,
+            reveal_rx: None,
             toast: None,
             pending_open: None,
             last_search: String::new(),
@@ -600,30 +602,31 @@ impl GalleryApp {
         self.show_toast("Image path copied".to_owned(), false);
     }
 
-    /// Reveal the current image in the desktop file manager. `gio open` honours
-    /// the user's default handler; `xdg-open` is the portable fallback.
+    /// Reveal the current image in the desktop file manager, selecting it when
+    /// the default manager supports the freedesktop FileManager1 call.
     fn reveal_in_file_manager(&mut self) {
         let Some(path) = self.current_viewer_path() else {
             return;
         };
-        let dir = path
-            .parent()
-            .map(|parent| parent.to_path_buf())
-            .unwrap_or_else(|| path.clone());
-        let mut last_error = None;
-        for program in ["gio", "xdg-open"] {
-            let mut command = std::process::Command::new(program);
-            command.arg(&dir);
-            match command.spawn() {
-                Ok(_) => {
-                    log::info!("opened {} with {program}", dir.display());
-                    return;
-                }
-                Err(error) => last_error = Some(format!("{program}: {error}")),
+        self.reveal_rx = Some(crate::reveal::spawn(path));
+        self.show_toast("Opening in file manager…".to_owned(), false);
+    }
+
+    fn poll_reveal(&mut self) {
+        let Some(rx) = &self.reveal_rx else {
+            return;
+        };
+        let Ok(result) = rx.try_recv() else {
+            return;
+        };
+        self.reveal_rx = None;
+        match result {
+            Ok(()) => self.show_toast("Opened in file manager".to_owned(), false),
+            Err(error) => {
+                log::warn!("reveal failed: {error}");
+                self.show_toast(format!("Could not open file manager: {error}"), true);
             }
         }
-        let detail = last_error.unwrap_or_else(|| "no file manager command".to_owned());
-        self.show_toast(format!("Could not open file manager ({detail})"), true);
     }
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
@@ -1525,6 +1528,7 @@ impl eframe::App for GalleryApp {
         self.viewer.poll();
         self.poll_scan();
         self.poll_export();
+        self.poll_reveal();
         self.handle_keys(&ctx);
 
         self.top_bar(ui);
@@ -1539,7 +1543,12 @@ impl eframe::App for GalleryApp {
         self.sync_filters();
         self.toast(&ctx);
 
-        if self.scanning || self.viewer.loading || self.thumbs.busy() || self.exporting {
+        if self.scanning
+            || self.viewer.loading
+            || self.thumbs.busy()
+            || self.exporting
+            || self.reveal_rx.is_some()
+        {
             ctx.request_repaint_after(Duration::from_millis(60));
         }
     }

@@ -54,10 +54,11 @@ pub fn system_prefers_dark() -> bool {
 
 pub use crate::ui::tokens::Palette;
 
-/// Bundled Inter faces (SIL OFL 1.1) — the UI renders the same everywhere,
-/// without a runtime scan of the user's font folders.
-const INTER_REGULAR: &[u8] = include_bytes!("../assets/fonts/Inter_18pt-Regular.ttf");
-const INTER_SEMIBOLD: &[u8] = include_bytes!("../assets/fonts/Inter_18pt-SemiBold.ttf");
+/// Bundled Inter text faces (SIL OFL 1.1, see `assets/fonts/LICENSE.txt`). The
+/// release's static text cut renders better at UI sizes than the 18 pt
+/// optical-size cut.
+const INTER_REGULAR: &[u8] = include_bytes!("../assets/fonts/Inter-Regular.ttf");
+const INTER_SEMIBOLD: &[u8] = include_bytes!("../assets/fonts/Inter-SemiBold.ttf");
 
 pub fn install_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
@@ -109,6 +110,11 @@ pub fn apply(ctx: &egui::Context, palette: Palette) {
     visuals.selection.bg_fill = palette.accent;
     visuals.selection.stroke = Stroke::new(1.0, palette.on_accent);
 
+    // egui's sub-pixel glyph binning buys even kerning at the cost of blurrier
+    // text; hinting stays on for crisp stems.
+    visuals.text_options.subpixel_binning = false;
+    visuals.text_options.font_hinting = true;
+
     visuals.widgets.noninteractive.bg_fill = palette.bg;
     visuals.widgets.noninteractive.weak_bg_fill = palette.bg;
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, palette.border);
@@ -148,11 +154,11 @@ pub fn apply(ctx: &egui::Context, palette: Palette) {
         style.spacing.indent = 16.0;
         style.spacing.interact_size = egui::vec2(m.icon_button, m.control_h_md);
         style.text_styles = [
-            (TextStyle::Heading, bold_font(19.0)),
-            (TextStyle::Body, FontId::proportional(14.0)),
-            (TextStyle::Button, FontId::proportional(14.0)),
-            (TextStyle::Small, FontId::proportional(12.0)),
-            (TextStyle::Monospace, FontId::monospace(13.0)),
+            (TextStyle::Heading, bold_font(20.0)),
+            (TextStyle::Body, FontId::proportional(15.0)),
+            (TextStyle::Button, FontId::proportional(15.0)),
+            (TextStyle::Small, FontId::proportional(12.5)),
+            (TextStyle::Monospace, FontId::monospace(13.5)),
         ]
         .into();
     });

@@ -5,6 +5,7 @@ mod grade;
 mod model;
 mod nvjpeg;
 mod luts;
+mod reveal;
 mod scan;
 mod theme;
 mod thumbs;

@@ -12,6 +12,7 @@ eframe = { version = "0.37.0", default-features = false, features = [
     "x11",
     "wayland",
     "accesskit",
+    "clipboard",
 ] }
 egui = "0.37.0"
 egui-wgpu = "0.37.0"

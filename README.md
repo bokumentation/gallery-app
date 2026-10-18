@@ -26,8 +26,9 @@ Browse:
 Edit (right-side adjust panel, RapidRAW-style layout):
 
 - Top toolbar with rotate ⟲/⟳ 90° steps, flip H/V, crop toggle, adjust toggle,
-  copy path, image-info toggle, open-in-file-manager, and an accent Export
-  button (full-resolution JPEG + JSON sidecar); bottom bar with filename,
+  copy path, image-info toggle, open-in-file-manager (opens the folder and
+  selects the image when the desktop supports FileManager1), and an accent
+  Export button (full-resolution JPEG + JSON sidecar); bottom bar with filename,
   dimensions and file size
 - Right panel switches between **Adjust** and **Image Info** (path, dimensions,
   export size, megapixels, file size, format, modified time, edit summary)
@@ -132,6 +133,7 @@ context in a worker thread at app startup, so it does not block the UI.
 - `src/grade/wb.rs` — Robertson white balance f64 math (Bradford chromatic adaptation)
 - `src/crop.rs` — crop-rectangle math and straighten solve
 - `src/export.rs` — full-resolution export worker: decode → offscreen grade → readback → JPEG + sidecar
+- `src/reveal.rs` — open the image in the default file manager (FileManager1 → Nautilus → `gio open` → `xdg-open`)
 - `src/luts.rs` — `.cube` parser, persistent LUT store, 3D texture upload
 - `src/scan.rs` — background directory scanning
 - `src/thumbs.rs` — thumbnail workers, disk cache, CPU image decoding
@@ -154,6 +156,12 @@ The UI is data-driven; no widget rewrites are needed for the common changes:
   `RIGHT_ACTIONS` in `src/ui/actions.rs`; change `ButtonStyle` to restyle it.
 - **Right panel** — switch the tab list in `src/ui/layout.rs` or reorder
   `EDIT_SECTIONS` to rearrange the adjust panel.
+
+Fonts are bundled Inter text faces in `assets/fonts` (OFL, see `LICENSE.txt`),
+registered in `src/theme.rs`; text sizes live in the `style.text_styles` table
+there. sub-pixel glyph binning is disabled for crisper text (egui renders
+grayscale antialiasing only, so it cannot match GTK's LCD sub-pixel AA). Swap
+the two `.ttf` files to change the UI font.
 
 The shadcn Rust crates (`shadcn-egui`, `egui-shadcn`) currently target
 egui 0.33/0.34, so this project implements the shadcn tokens and components
