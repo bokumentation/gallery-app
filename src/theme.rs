@@ -1,6 +1,6 @@
 use egui::{
-    Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Margin, Stroke, TextStyle,
-    Visuals,
+    Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Margin, Stroke,
+    TextStyle, Visuals,
 };
 use std::sync::Arc;
 
@@ -164,11 +164,24 @@ pub fn apply(ctx: &egui::Context, palette: Palette) {
         style.spacing.menu_margin = Margin::same(m.space_xs as i8);
         style.spacing.indent = 12.0;
         style.spacing.interact_size = egui::vec2(m.icon_button, m.control_h_md);
-        style.spacing.scroll.floating = false;
-        style.spacing.scroll.bar_width = 5.0;
-        style.spacing.scroll.bar_inner_margin = 1.0;
-        style.spacing.scroll.bar_outer_margin = 1.0;
-        style.spacing.scroll.content_margin = Margin::same(0);
+        // Floating scrollbars: hidden at rest, fade in over the panel, and
+        // expand when the bar itself is hovered. Because they overlay the
+        // content they reserve no width, so panel/grid layout never jumps.
+        style.spacing.scroll.floating = true;
+        style.spacing.scroll.bar_width = 8.0;
+        style.spacing.scroll.floating_width = 4.0;
+        style.spacing.scroll.floating_allocated_width = 0.0;
+        style.spacing.scroll.handle_min_length = 24.0;
+        style.spacing.scroll.bar_inner_margin = 2.0;
+        style.spacing.scroll.bar_outer_margin = 2.0;
+        style.spacing.scroll.content_margin = Margin::ZERO;
+        style.spacing.scroll.foreground_color = false;
+        style.spacing.scroll.dormant_handle_opacity = 0.0;
+        style.spacing.scroll.active_handle_opacity = if palette.dark { 0.55 } else { 0.7 };
+        style.spacing.scroll.interact_handle_opacity = if palette.dark { 0.9 } else { 1.0 };
+        style.spacing.scroll.dormant_background_opacity = 0.0;
+        style.spacing.scroll.active_background_opacity = 0.0;
+        style.spacing.scroll.interact_background_opacity = if palette.dark { 0.12 } else { 0.08 };
         // Fixed track width so a slider's changing value text cannot reflow the
         // surrounding panel row.
         style.spacing.slider_width = 120.0;
@@ -181,4 +194,39 @@ pub fn apply(ctx: &egui::Context, palette: Palette) {
         ]
         .into();
     });
+}
+
+/// Paint scrollbar handles with the muted scroll color for the duration of one
+/// scroll area. `ScrollStyle` only exposes opacity, not a color, so the handle
+/// color comes from the temporary widget visuals. The previous visuals are
+/// restored immediately, keeping ordinary controls untouched.
+pub fn with_scroll_handle<R>(
+    ui: &mut egui::Ui,
+    palette: Palette,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let old = {
+        let widgets = &ui.style().visuals.widgets;
+        (
+            widgets.inactive.bg_fill,
+            widgets.hovered.bg_fill,
+            widgets.active.bg_fill,
+        )
+    };
+    {
+        let widgets = &mut ui.style_mut().visuals.widgets;
+        widgets.inactive.bg_fill = palette.scroll_handle;
+        widgets.hovered.bg_fill = palette.scroll_handle;
+        widgets.active.bg_fill = palette.scroll_handle;
+    }
+
+    let result = add(ui);
+
+    {
+        let widgets = &mut ui.style_mut().visuals.widgets;
+        widgets.inactive.bg_fill = old.0;
+        widgets.hovered.bg_fill = old.1;
+        widgets.active.bg_fill = old.2;
+    }
+    result
 }

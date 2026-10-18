@@ -30,7 +30,12 @@ pub struct ExportPaths {
 
 /// Run one export on a worker thread. The returned receiver yields exactly one
 /// outcome.
-pub fn spawn(device: Device, queue: Queue, path: PathBuf, edit: EditState) -> Receiver<ExportOutcome> {
+pub fn spawn(
+    device: Device,
+    queue: Queue,
+    path: PathBuf,
+    edit: EditState,
+) -> Receiver<ExportOutcome> {
     let (tx, rx) = unbounded();
     std::thread::Builder::new()
         .name("export".to_owned())
@@ -46,7 +51,12 @@ pub fn spawn(device: Device, queue: Queue, path: PathBuf, edit: EditState) -> Re
     rx
 }
 
-fn run(device: &Device, queue: &Queue, path: &Path, edit: &EditState) -> Result<ExportPaths, String> {
+fn run(
+    device: &Device,
+    queue: &Queue,
+    path: &Path,
+    edit: &EditState,
+) -> Result<ExportPaths, String> {
     let decoded = decode_image(path)?;
     let rgba = decoded.to_rgba8();
     let (width, height) = rgba.dimensions();
@@ -72,12 +82,7 @@ fn run(device: &Device, queue: &Queue, path: &Path, edit: &EditState) -> Result<
     // which the encoder must be told explicitly).
     let mut jpeg = Vec::new();
     image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, JPEG_QUALITY)
-        .encode(
-            &rgb,
-            out_width,
-            out_height,
-            image::ExtendedColorType::Rgb8,
-        )
+        .encode(&rgb, out_width, out_height, image::ExtendedColorType::Rgb8)
         .map_err(|err| format!("encode JPEG ({out_width}x{out_height}): {err}"))?;
     std::fs::write(&image_path, &jpeg)
         .map_err(|err| format!("write {}: {err}", image_path.display()))?;
@@ -140,8 +145,9 @@ fn grade_pixels(
 
     // Attach the LUT if the recipe names one and it loads from the store.
     let lut_texture = match edit.lut.as_deref() {
-        Some(name) => crate::luts::CubeLut::load(name)
-            .map(|cube| cube.upload(device, queue, "export-lut")),
+        Some(name) => {
+            crate::luts::CubeLut::load(name).map(|cube| cube.upload(device, queue, "export-lut"))
+        }
         None => None,
     };
     let lut_view = lut_texture
@@ -186,7 +192,8 @@ fn grade_pixels(
             timeout: None,
         })
         .map_err(|err| format!("poll device: {err}"))?;
-    rx.recv().map_err(|err| format!("map callback: {err}"))?
+    rx.recv()
+        .map_err(|err| format!("map callback: {err}"))?
         .map_err(|err| format!("map buffer: {err}"))?;
 
     let mapped = slice
@@ -226,7 +233,10 @@ fn edit_sidecar(path: &Path, edit: &EditState) -> String {
     json.push_str("{\n");
     json.push_str("  \"app\": \"gallery-app\",\n");
     json.push_str("  \"version\": 1,\n");
-    json.push_str(&format!("  \"source\": {},\n", json_string(&path.display().to_string())));
+    json.push_str(&format!(
+        "  \"source\": {},\n",
+        json_string(&path.display().to_string())
+    ));
     json.push_str("  \"adjustments\": {\n");
     json.push_str(&format!("    \"exposure\": {},\n", a.exposure));
     json.push_str(&format!("    \"brightness\": {},\n", a.brightness));
@@ -250,7 +260,11 @@ fn edit_sidecar(path: &Path, edit: &EditState) -> String {
             range.hue,
             range.saturation,
             range.luminance,
-            if index + 1 == crate::grade::HSL_NAMES.len() { "" } else { "," }
+            if index + 1 == crate::grade::HSL_NAMES.len() {
+                ""
+            } else {
+                ","
+            }
         ));
     }
     json.push_str("  },\n");
@@ -268,21 +282,31 @@ fn edit_sidecar(path: &Path, edit: &EditState) -> String {
     json.push_str("  },\n");
     json.push_str("  \"geometry\": {\n");
     json.push_str(&format!("    \"rotation\": {},\n", edit.rotation));
-    json.push_str(&format!("    \"orientationSteps\": {},\n", edit.orientation_steps));
+    json.push_str(&format!(
+        "    \"orientationSteps\": {},\n",
+        edit.orientation_steps
+    ));
     json.push_str(&format!("    \"flipH\": {},\n", edit.flip_h));
     json.push_str(&format!("    \"flipV\": {},\n", edit.flip_v));
     json.push_str(&format!(
         "    \"crop\": {},\n",
-        edit.crop.map(crop_json).unwrap_or_else(|| "null".to_owned())
+        edit.crop
+            .map(crop_json)
+            .unwrap_or_else(|| "null".to_owned())
     ));
     json.push_str(&format!(
         "    \"aspect\": {}\n",
-        edit.aspect.map(|value| value.to_string()).unwrap_or_else(|| "null".to_owned())
+        edit.aspect
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "null".to_owned())
     ));
     json.push_str("  },\n");
     json.push_str(&format!(
         "  \"lut\": {}\n",
-        edit.lut.as_deref().map(json_string).unwrap_or_else(|| "null".to_owned())
+        edit.lut
+            .as_deref()
+            .map(json_string)
+            .unwrap_or_else(|| "null".to_owned())
     ));
     json.push_str("}\n");
     json
@@ -341,10 +365,9 @@ mod tests {
 
     /// Create a device + queue, or `None` when the machine has no adapter.
     fn gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .ok()?;
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter =
+            block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
         block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()
     }
 
@@ -375,14 +398,17 @@ mod tests {
         });
         edit.adjustments.saturation = 100.0;
         let (graded, out_w, out_h) =
-            grade_pixels(&device, &queue, rgba.clone(), [4, 4], &edit)
-                .expect("grade + readback");
+            grade_pixels(&device, &queue, rgba.clone(), [4, 4], &edit).expect("grade + readback");
         assert_eq!((out_w, out_h), (2, 2), "crop output size");
         assert_eq!(graded.len(), 2 * 2 * 4, "crop output length");
 
         // Saturation should have changed the cropped pixels; alpha stays opaque.
         let source_pixel = &rgba[(1 * 4 + 1) * 4..(1 * 4 + 1) * 4 + 4];
-        assert_ne!(&graded[..3], &source_pixel[..3], "saturation changed pixels");
+        assert_ne!(
+            &graded[..3],
+            &source_pixel[..3],
+            "saturation changed pixels"
+        );
         assert_eq!(graded[3], 255);
     }
 

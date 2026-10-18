@@ -473,21 +473,21 @@ impl DecodeWorker {
                     Ok(data) => {
                         let started = Instant::now();
                         match decoder.decode_jpeg(&data, target) {
-                        Ok((rgba, [width, height], source)) => {
-                            log::info!(
-                                "nvJPEG {} -> {}x{} (source {}x{}) in {:.1} ms",
-                                path.display(),
-                                width,
-                                height,
-                                source[0],
-                                source[1],
-                                started.elapsed().as_secs_f64() * 1000.0
-                            );
-                            return Ok((rgba, width, height, source));
-                        }
-                        Err(error) => {
-                            log::warn!("nvJPEG decode failed for {}: {error}", path.display());
-                        }
+                            Ok((rgba, [width, height], source)) => {
+                                log::info!(
+                                    "nvJPEG {} -> {}x{} (source {}x{}) in {:.1} ms",
+                                    path.display(),
+                                    width,
+                                    height,
+                                    source[0],
+                                    source[1],
+                                    started.elapsed().as_secs_f64() * 1000.0
+                                );
+                                return Ok((rgba, width, height, source));
+                            }
+                            Err(error) => {
+                                log::warn!("nvJPEG decode failed for {}: {error}", path.display());
+                            }
                         }
                     }
                     Err(error) => log::warn!("read failed for {}: {error}", path.display()),
@@ -499,10 +499,7 @@ impl DecodeWorker {
     }
 }
 
-fn decode_cpu(
-    path: &Path,
-    target: [u32; 2],
-) -> Result<(Vec<u8>, u32, u32, [u32; 2]), String> {
+fn decode_cpu(path: &Path, target: [u32; 2]) -> Result<(Vec<u8>, u32, u32, [u32; 2]), String> {
     let image = decode_image(path)?;
     let source = [image.width(), image.height()];
     let image = image.thumbnail(target[0].max(1), target[1].max(1));
@@ -567,8 +564,7 @@ fn decode_and_upload(
     }
 
     let decode_started = Instant::now();
-    let (rgba, width, height, source) =
-        worker.rgba(&key.path, [key.width, key.height])?;
+    let (rgba, width, height, source) = worker.rgba(&key.path, [key.width, key.height])?;
     let decode = decode_started.elapsed();
 
     let upload_started = Instant::now();

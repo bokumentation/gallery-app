@@ -28,8 +28,7 @@ type DecoderStateCreate = unsafe extern "C" fn(Handle, Decoder, *mut JpegState) 
 type StateDestroy = unsafe extern "C" fn(JpegState) -> Status;
 type StreamCreate = unsafe extern "C" fn(Handle, *mut JpegStream) -> Status;
 type StreamDestroy = unsafe extern "C" fn(JpegStream) -> Status;
-type StreamParse =
-    unsafe extern "C" fn(Handle, *const u8, usize, i32, i32, JpegStream) -> Status;
+type StreamParse = unsafe extern "C" fn(Handle, *const u8, usize, i32, i32, JpegStream) -> Status;
 type ParamsCreate = unsafe extern "C" fn(Handle, *mut DecodeParams) -> Status;
 type ParamsDestroy = unsafe extern "C" fn(DecodeParams) -> Status;
 type ParamsOutput = unsafe extern "C" fn(DecodeParams, u32) -> Status;
@@ -230,10 +229,7 @@ fn load_library() -> Result<Library, String> {
             Err(error) => errors.push(format!("{candidate}: {error}")),
         }
     }
-    Err(format!(
-        "nvJPEG library not found ({})",
-        errors.join("; ")
-    ))
+    Err(format!("nvJPEG library not found ({})", errors.join("; ")))
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -269,7 +265,10 @@ impl NvJpegDecoder {
         let cuda_stream = cuda.default_stream();
 
         let mut handle: Handle = std::ptr::null_mut();
-        check(unsafe { (api.create_simple)(&mut handle) }, "nvjpegCreateSimple")?;
+        check(
+            unsafe { (api.create_simple)(&mut handle) },
+            "nvjpegCreateSimple",
+        )?;
 
         let mut decoder: Decoder = std::ptr::null_mut();
         let mut status = unsafe { (api.decoder_create)(handle, 0, &mut decoder) };
@@ -401,19 +400,17 @@ impl NvJpegDecoder {
         )?;
         check(
             unsafe {
-                (self.api.stream_parse)(
-                    self.handle,
-                    data.as_ptr(),
-                    data.len(),
-                    0,
-                    1,
-                    self.stream,
-                )
+                (self.api.stream_parse)(self.handle, data.as_ptr(), data.len(), 0, 1, self.stream)
             },
             "nvjpegJpegStreamParse",
         )?;
         let mut image = NvjpegImage {
-            channel: [pointer, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()],
+            channel: [
+                pointer,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            ],
             pitch: [plan.pitch, 0, 0, 0],
         };
         check(
@@ -448,8 +445,8 @@ impl NvJpegDecoder {
         let plan = self.plan(data, target)?;
         let length = plan.pitch * plan.output[1] as usize;
         let stream = self.cuda_stream.clone();
-        let buffer: CudaSlice<u8> = unsafe { stream.alloc::<u8>(length) }
-            .map_err(|err| format!("CUDA alloc: {err:?}"))?;
+        let buffer: CudaSlice<u8> =
+            unsafe { stream.alloc::<u8>(length) }.map_err(|err| format!("CUDA alloc: {err:?}"))?;
         let (pointer, _guard) = buffer.device_ptr(&stream);
         self.decode_jpeg_into(data, plan, pointer as *mut u8)?;
         drop(_guard);
@@ -464,8 +461,8 @@ impl NvJpegDecoder {
         let mut rgba = vec![255u8; output_width as usize * output_height as usize * 4];
         for y in 0..output_height as usize {
             let src_row = &rgb[y * pitch..y * pitch + output_width as usize * 3];
-            let dst_row = &mut rgba
-                [y * output_width as usize * 4..(y + 1) * output_width as usize * 4];
+            let dst_row =
+                &mut rgba[y * output_width as usize * 4..(y + 1) * output_width as usize * 4];
             for (source, destination) in src_row.chunks_exact(3).zip(dst_row.chunks_exact_mut(4)) {
                 destination[0] = source[0];
                 destination[1] = source[1];
@@ -473,17 +470,10 @@ impl NvJpegDecoder {
             }
         }
 
-        Ok((
-            rgba,
-            [output_width, output_height],
-            plan.source,
-        ))
+        Ok((rgba, [output_width, output_height], plan.source))
     }
 
-    fn decode_jpeg_legacy(
-        &mut self,
-        data: &[u8],
-    ) -> Result<(Vec<u8>, [u32; 2], [u32; 2]), String> {
+    fn decode_jpeg_legacy(&mut self, data: &[u8]) -> Result<(Vec<u8>, [u32; 2], [u32; 2]), String> {
         let mut components = 0i32;
         let mut subsampling = 0i32;
         let mut widths = [0i32; 4];
@@ -510,7 +500,12 @@ impl NvJpegDecoder {
             .map_err(|err| format!("CUDA alloc: {err:?}"))?;
         let (pointer, _guard) = buffer.device_ptr(&self.cuda_stream);
         let mut image = NvjpegImage {
-            channel: [pointer as *mut u8, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()],
+            channel: [
+                pointer as *mut u8,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            ],
             pitch: [pitch, 0, 0, 0],
         };
         check(

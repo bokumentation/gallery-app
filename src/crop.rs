@@ -133,7 +133,9 @@ impl CropGeom {
             Some(ratio) => (width, width / ratio),
             None => (width, height),
         };
-        let width = width.min(self.oriented[0]).max(MIN_CROP_PX.min(self.oriented[0]));
+        let width = width
+            .min(self.oriented[0])
+            .max(MIN_CROP_PX.min(self.oriented[0]));
         let height = height
             .min(self.oriented[1])
             .max(MIN_CROP_PX.min(self.oriented[1]));
@@ -261,8 +263,10 @@ impl CropDrag {
                     Handle::NorthWest | Handle::NorthEast => -1.0,
                     _ => 1.0,
                 };
-                let anchor = (if sign_x > 0.0 { left } else { right },
-                              if sign_y > 0.0 { top } else { bottom });
+                let anchor = (
+                    if sign_x > 0.0 { left } else { right },
+                    if sign_y > 0.0 { top } else { bottom },
+                );
                 let max_w = if sign_x > 0.0 {
                     max_x - anchor.0
                 } else {
@@ -286,9 +290,17 @@ impl CropDrag {
                         height = (width / aspect).min(max_h).max(MIN_CROP_PX.min(max_h));
                     }
                 }
-                left = if sign_x > 0.0 { anchor.0 } else { anchor.0 - width };
+                left = if sign_x > 0.0 {
+                    anchor.0
+                } else {
+                    anchor.0 - width
+                };
                 right = left + width;
-                top = if sign_y > 0.0 { anchor.1 } else { anchor.1 - height };
+                top = if sign_y > 0.0 {
+                    anchor.1
+                } else {
+                    anchor.1 - height
+                };
                 bottom = top + height;
             }
         }

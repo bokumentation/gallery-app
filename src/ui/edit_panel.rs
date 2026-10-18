@@ -59,18 +59,17 @@ pub fn show(app: &mut GalleryApp, ui: &mut Ui) {
             });
             ui.add_space(2.0);
 
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                // Reserve the scrollbar width permanently: opening a tall
-                // section must not narrow the content.
-                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    match app.right_tab {
-                        RightTab::Edit => panel_content(app, ui),
-                        RightTab::Info => crate::ui::info_panel::panel_content(app, ui),
-                    }
-                });
+            crate::theme::with_scroll_handle(ui, palette, |ui| {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        match app.right_tab {
+                            RightTab::Edit => panel_content(app, ui),
+                            RightTab::Info => crate::ui::info_panel::panel_content(app, ui),
+                        }
+                    });
+            });
         });
 }
 
@@ -81,30 +80,40 @@ fn panel_content(app: &mut GalleryApp, ui: &mut Ui) {
     };
 
     // Seed the per-image edit entry so values survive the viewer.
-    app.edits.entry(path.clone()).or_default();
+    app.edits.entry(path.to_path_buf()).or_default();
 
     for &section in EDIT_SECTIONS {
         let mut open = app.edit_open[section.index()];
-        w::section_card(ui, section.title(), &mut open, palette, |ui| match section {
-            Section::Lut => lut_section(app, &path, ui),
-            Section::Light => light_section(app, &path, ui),
-            Section::Color => color_section(app, &path, ui),
-            Section::Hsl => hsl_section(app, &path, ui),
-            Section::Grading => grading_section(app, &path, ui),
-            Section::Crop => crop_section(app, &path, ui),
-        });
+        w::section_card(
+            ui,
+            section.title(),
+            &mut open,
+            palette,
+            |ui| match section {
+                Section::Lut => lut_section(app, &path, ui),
+                Section::Light => light_section(app, &path, ui),
+                Section::Color => color_section(app, &path, ui),
+                Section::Hsl => hsl_section(app, &path, ui),
+                Section::Grading => grading_section(app, &path, ui),
+                Section::Crop => crop_section(app, &path, ui),
+            },
+        );
         app.edit_open[section.index()] = open;
     }
 }
 
 /// The LUT section sits at the top of the panel hierarchy: it is the most
 /// global adjustment and applies before the per-slider color work.
-fn lut_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
+fn lut_section(app: &mut GalleryApp, path: &std::path::Path, ui: &mut Ui) {
     let palette = app.palette;
-    let state = app.edits.entry(path.clone()).or_default().clone();
+    let state = app.edits.entry(path.to_path_buf()).or_default().clone();
     ui.add_space(2.0);
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Lookup table").size(theme::TEXT_SMALL).color(palette.dim));
+        ui.label(
+            RichText::new("Lookup table")
+                .size(theme::TEXT_SMALL)
+                .color(palette.dim),
+        );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if w::flat_button(ui, "Import…", palette)
                 .on_hover_text("Import a .cube LUT file and keep it installed")
@@ -157,171 +166,219 @@ fn lut_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
 
 /// The crop tool: mode switch, 90-degree steps, flips, aspect presets and the
 /// straighten slider. The on-screen frame lives in `crop_overlay`.
-fn crop_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
+fn crop_section(app: &mut GalleryApp, path: &std::path::Path, ui: &mut Ui) {
     let palette = app.palette;
-    let state = app.edits.entry(path.clone()).or_default().clone();
-            let source = app
-                .viewer
-                .source_dimensions(path)
-                .or_else(|| app.thumbs.get(path).map(|thumb| thumb.size))
-                .unwrap_or([0, 0]);
-            let oriented_f32 = state.oriented_size(source).map(|axis| axis as f32);
+    let state = app.edits.entry(path.to_path_buf()).or_default().clone();
+    let source = app
+        .viewer
+        .source_dimensions(path)
+        .or_else(|| app.thumbs.get(path).map(|thumb| thumb.size))
+        .unwrap_or([0, 0]);
+    let oriented_f32 = state.oriented_size(source).map(|axis| axis as f32);
 
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Frame").size(11.5).color(palette.dim));
-                let mut active = app.crop_active;
-                if w::switch(ui, &mut active, palette).changed() {
-                    app.crop_drag = None;
-                    app.crop_active = active;
-                }
-            });
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Frame").size(11.5).color(palette.dim));
+        let mut active = app.crop_active;
+        if w::switch(ui, &mut active, palette).changed() {
+            app.crop_drag = None;
+            app.crop_active = active;
+        }
+    });
 
-            ui.horizontal(|ui| {
-                use w::Icon;
-                if w::icon_button(ui, Icon::RotateRight, palette)
-                    .on_hover_text("Rotate 90 degrees")
-                    .clicked()
-                {
-                    app.crop_drag = None;
-                    let state = app.edits.get_mut(path).unwrap();
-                    state.orientation_steps = (state.orientation_steps + 1) % 4;
-                    state.crop = None;
-                }
-                if w::icon_button(ui, Icon::RotateLeft, palette)
-                    .on_hover_text("Rotate back 90 degrees")
-                    .clicked()
-                {
-                    app.crop_drag = None;
-                    let state = app.edits.get_mut(path).unwrap();
-                    state.orientation_steps = (state.orientation_steps + 3) % 4;
-                    state.crop = None;
-                }
-                if w::icon_button(ui, Icon::FlipH, palette)
-                    .on_hover_text("Flip horizontally")
-                    .clicked()
-                {
-                    app.crop_drag = None;
-                    let state = app.edits.get_mut(path).unwrap();
-                    state.flip_h = !state.flip_h;
-                    state.crop = None;
-                }
-                if w::icon_button(ui, Icon::FlipV, palette)
-                    .on_hover_text("Flip vertically")
-                    .clicked()
-                {
-                    app.crop_drag = None;
-                    let state = app.edits.get_mut(path).unwrap();
-                    state.flip_v = !state.flip_v;
-                    state.crop = None;
-                }
-            });
+    ui.horizontal(|ui| {
+        use w::Icon;
+        if w::icon_button(ui, Icon::RotateRight, palette)
+            .on_hover_text("Rotate 90 degrees")
+            .clicked()
+        {
+            app.crop_drag = None;
+            let state = app.edits.get_mut(path).unwrap();
+            state.orientation_steps = (state.orientation_steps + 1) % 4;
+            state.crop = None;
+        }
+        if w::icon_button(ui, Icon::RotateLeft, palette)
+            .on_hover_text("Rotate back 90 degrees")
+            .clicked()
+        {
+            app.crop_drag = None;
+            let state = app.edits.get_mut(path).unwrap();
+            state.orientation_steps = (state.orientation_steps + 3) % 4;
+            state.crop = None;
+        }
+        if w::icon_button(ui, Icon::FlipH, palette)
+            .on_hover_text("Flip horizontally")
+            .clicked()
+        {
+            app.crop_drag = None;
+            let state = app.edits.get_mut(path).unwrap();
+            state.flip_h = !state.flip_h;
+            state.crop = None;
+        }
+        if w::icon_button(ui, Icon::FlipV, palette)
+            .on_hover_text("Flip vertically")
+            .clicked()
+        {
+            app.crop_drag = None;
+            let state = app.edits.get_mut(path).unwrap();
+            state.flip_v = !state.flip_v;
+            state.crop = None;
+        }
+    });
 
-            ui.add_space(4.0);
-            ui.label(
-                RichText::new("Aspect")
-                    .size(theme::TEXT_SMALL)
-                    .color(palette.dim),
-            );
-            let presets: [(&str, Option<f32>); 6] = [
-                ("Free", None),
-                ("1:1", Some(1.0)),
-                ("4:3", Some(4.0 / 3.0)),
-                ("3:2", Some(3.0 / 2.0)),
-                ("16:9", Some(16.0 / 9.0)),
-                ("9:16", Some(9.0 / 16.0)),
-            ];
-            let cell = ((ui.available_width() - 12.0) / 3.0).max(48.0);
-            egui::Grid::new("crop-aspect-grid")
-                .num_columns(3)
-                .spacing([6.0, 6.0])
-                .show(ui, |ui| {
-                    for (index, (label, ratio)) in presets.iter().enumerate() {
-                        let selected = state.aspect == *ratio;
-                        let button = egui::Button::new(
-                            RichText::new(*label).size(theme::TEXT_SMALL).color(
-                                if selected {
-                                    palette.on_accent
-                                } else {
-                                    palette.text
-                                },
-                            ),
-                        )
-                        .fill(if selected {
-                            palette.accent
+    ui.add_space(4.0);
+    ui.label(
+        RichText::new("Aspect")
+            .size(theme::TEXT_SMALL)
+            .color(palette.dim),
+    );
+    let presets: [(&str, Option<f32>); 6] = [
+        ("Free", None),
+        ("1:1", Some(1.0)),
+        ("4:3", Some(4.0 / 3.0)),
+        ("3:2", Some(3.0 / 2.0)),
+        ("16:9", Some(16.0 / 9.0)),
+        ("9:16", Some(9.0 / 16.0)),
+    ];
+    let cell = ((ui.available_width() - 12.0) / 3.0).max(48.0);
+    egui::Grid::new("crop-aspect-grid")
+        .num_columns(3)
+        .spacing([6.0, 6.0])
+        .show(ui, |ui| {
+            for (index, (label, ratio)) in presets.iter().enumerate() {
+                let selected = state.aspect == *ratio;
+                let button =
+                    egui::Button::new(RichText::new(*label).size(theme::TEXT_SMALL).color(
+                        if selected {
+                            palette.on_accent
                         } else {
-                            Color32::TRANSPARENT
-                        })
-                        .stroke(if selected {
-                            egui::Stroke::NONE
-                        } else {
-                            egui::Stroke::new(1.0, palette.input)
-                        })
-                        .corner_radius(egui::CornerRadius::same(
-                            palette.metrics.radius_sm,
-                        ))
-                        .min_size(Vec2::new(cell, 28.0));
-                        if ui.add_sized([cell, 28.0], button).clicked() {
-                            app.crop_drag = None;
-                            let state = app.edits.get_mut(path).unwrap();
-                            let geometry = CropGeom {
-                                oriented: oriented_f32,
-                                rotation_deg: state.rotation,
-                            };
-                            // Preserve the current frame instead of resetting
-                            // it: re-fit an aspect change and re-validate for
-                            // straighten.
-                            let base = state.crop.unwrap_or_else(|| geometry.centered(None));
-                            state.aspect = *ratio;
-                            let next = match ratio {
-                                Some(ratio) => geometry.apply_aspect(base, *ratio),
-                                None => geometry.fit(base),
-                            };
-                            normalize_crop(state, &geometry, next);
-                        }
-                        if index % 3 == 2 {
-                            ui.end_row();
-                        }
-                    }
-                });
-
-            ui.add_space(4.0);
-            let mut rotation = state.rotation;
-            if w::slider(ui, &mut rotation, -45.0..=45.0, 0.5, "Straighten", palette) {
-                let geometry = CropGeom {
-                    oriented: oriented_f32,
-                    rotation_deg: rotation,
-                };
-                let state = app.edits.get_mut(path).unwrap();
-                state.rotation = rotation;
-                let base = state.crop.unwrap_or_else(|| geometry.centered(state.aspect));
-                normalize_crop(state, &geometry, geometry.fit(base));
+                            palette.text
+                        },
+                    ))
+                    .fill(if selected {
+                        palette.accent
+                    } else {
+                        Color32::TRANSPARENT
+                    })
+                    .stroke(if selected {
+                        egui::Stroke::NONE
+                    } else {
+                        egui::Stroke::new(1.0, palette.input)
+                    })
+                    .corner_radius(egui::CornerRadius::same(palette.metrics.radius_sm))
+                    .min_size(Vec2::new(cell, 28.0));
+                if ui.add_sized([cell, 28.0], button).clicked() {
+                    app.crop_drag = None;
+                    let state = app.edits.get_mut(path).unwrap();
+                    let geometry = CropGeom {
+                        oriented: oriented_f32,
+                        rotation_deg: state.rotation,
+                    };
+                    // Preserve the current frame instead of resetting
+                    // it: re-fit an aspect change and re-validate for
+                    // straighten.
+                    let base = state.crop.unwrap_or_else(|| geometry.centered(None));
+                    state.aspect = *ratio;
+                    let next = match ratio {
+                        Some(ratio) => geometry.apply_aspect(base, *ratio),
+                        None => geometry.fit(base),
+                    };
+                    normalize_crop(state, &geometry, next);
+                }
+                if index % 3 == 2 {
+                    ui.end_row();
+                }
             }
+        });
 
-            ui.add_space(4.0);
-            if w::flat_button(ui, "Reset crop", palette).clicked() {
-                app.crop_drag = None;
-                let state = app.edits.get_mut(path).unwrap();
-                state.crop = None;
-                state.rotation = 0.0;
-                state.aspect = None;
-            }
+    ui.add_space(4.0);
+    let mut rotation = state.rotation;
+    if w::slider(ui, &mut rotation, -45.0..=45.0, 0.5, "Straighten", palette) {
+        let geometry = CropGeom {
+            oriented: oriented_f32,
+            rotation_deg: rotation,
+        };
+        let state = app.edits.get_mut(path).unwrap();
+        state.rotation = rotation;
+        let base = state
+            .crop
+            .unwrap_or_else(|| geometry.centered(state.aspect));
+        normalize_crop(state, &geometry, geometry.fit(base));
+    }
+
+    ui.add_space(4.0);
+    if w::flat_button(ui, "Reset crop", palette).clicked() {
+        app.crop_drag = None;
+        let state = app.edits.get_mut(path).unwrap();
+        state.crop = None;
+        state.rotation = 0.0;
+        state.aspect = None;
+    }
 }
 
-fn light_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
+fn light_section(app: &mut GalleryApp, path: &std::path::Path, ui: &mut Ui) {
     let palette = app.palette;
-    let adjustments = &mut app.edits.entry(path.clone()).or_default().adjustments;
-    let _ = w::slider(ui, &mut adjustments.exposure, -5.0..=5.0, 0.01, "Exposure", palette);
-    let _ = w::slider(ui, &mut adjustments.brightness, -5.0..=5.0, 0.01, "Brightness", palette);
-    let _ = w::slider(ui, &mut adjustments.contrast, -100.0..=100.0, 1.0, "Contrast", palette);
-    let _ = w::slider(ui, &mut adjustments.highlights, -100.0..=100.0, 1.0, "Highlights", palette);
-    let _ = w::slider(ui, &mut adjustments.shadows, -100.0..=100.0, 1.0, "Shadows", palette);
-    let _ = w::slider(ui, &mut adjustments.whites, -100.0..=100.0, 1.0, "Whites", palette);
-    let _ = w::slider(ui, &mut adjustments.blacks, -100.0..=100.0, 1.0, "Blacks", palette);
+    let adjustments = &mut app.edits.entry(path.to_path_buf()).or_default().adjustments;
+    let _ = w::slider(
+        ui,
+        &mut adjustments.exposure,
+        -5.0..=5.0,
+        0.01,
+        "Exposure",
+        palette,
+    );
+    let _ = w::slider(
+        ui,
+        &mut adjustments.brightness,
+        -5.0..=5.0,
+        0.01,
+        "Brightness",
+        palette,
+    );
+    let _ = w::slider(
+        ui,
+        &mut adjustments.contrast,
+        -100.0..=100.0,
+        1.0,
+        "Contrast",
+        palette,
+    );
+    let _ = w::slider(
+        ui,
+        &mut adjustments.highlights,
+        -100.0..=100.0,
+        1.0,
+        "Highlights",
+        palette,
+    );
+    let _ = w::slider(
+        ui,
+        &mut adjustments.shadows,
+        -100.0..=100.0,
+        1.0,
+        "Shadows",
+        palette,
+    );
+    let _ = w::slider(
+        ui,
+        &mut adjustments.whites,
+        -100.0..=100.0,
+        1.0,
+        "Whites",
+        palette,
+    );
+    let _ = w::slider(
+        ui,
+        &mut adjustments.blacks,
+        -100.0..=100.0,
+        1.0,
+        "Blacks",
+        palette,
+    );
 }
 
-fn color_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
+fn color_section(app: &mut GalleryApp, path: &std::path::Path, ui: &mut Ui) {
     let palette = app.palette;
-    let adjustments = &mut app.edits.entry(path.clone()).or_default().adjustments;
+    let adjustments = &mut app.edits.entry(path.to_path_buf()).or_default().adjustments;
     let _ = w::slider_gradient(
         ui,
         &mut adjustments.temperature,
@@ -340,8 +397,22 @@ fn color_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
         palette,
         &TINT_GRADIENT,
     );
-    let _ = w::slider(ui, &mut adjustments.saturation, -100.0..=100.0, 1.0, "Saturation", palette);
-    let _ = w::slider(ui, &mut adjustments.vibrance, -100.0..=100.0, 1.0, "Vibrance", palette);
+    let _ = w::slider(
+        ui,
+        &mut adjustments.saturation,
+        -100.0..=100.0,
+        1.0,
+        "Saturation",
+        palette,
+    );
+    let _ = w::slider(
+        ui,
+        &mut adjustments.vibrance,
+        -100.0..=100.0,
+        1.0,
+        "Vibrance",
+        palette,
+    );
     let _ = w::slider_gradient(
         ui,
         &mut adjustments.hue,
@@ -395,13 +466,15 @@ pub fn crop_overlay(app: &mut GalleryApp, ui: &mut Ui, rect: Rect, source: [f32;
     let palette = app.palette;
 
     // Work on a local snapshot; write the mutated state back at the end.
-    let mut state = app.edits.entry(path.clone()).or_default().clone();
+    let mut state = app.edits.entry(path.to_path_buf()).or_default().clone();
     let oriented = state.oriented_size([source[0] as u32, source[1] as u32]);
     let geometry = CropGeom {
         oriented: oriented.map(|axis| axis as f32),
         rotation_deg: state.rotation,
     };
-    let mut crop = state.crop.unwrap_or_else(|| geometry.fit(geometry.centered(state.aspect)));
+    let mut crop = state
+        .crop
+        .unwrap_or_else(|| geometry.fit(geometry.centered(state.aspect)));
 
     // The drawn texture is the full oriented frame (crop preview mode), so
     // the same scale applies on both axes because the fit preserves aspect.
@@ -424,18 +497,16 @@ pub fn crop_overlay(app: &mut GalleryApp, ui: &mut Ui, rect: Rect, source: [f32;
         0,
         dim,
     );
-    painter.rect_filled(Rect::from_min_size(
-        egui::pos2(rect.min.x, ui_crop.max.y),
-        egui::vec2(
-            rect.width(),
-            (rect.max.y - ui_crop.max.y).max(0.0),
+    painter.rect_filled(
+        Rect::from_min_size(
+            egui::pos2(rect.min.x, ui_crop.max.y),
+            egui::vec2(rect.width(), (rect.max.y - ui_crop.max.y).max(0.0)),
         ),
-    ), 0, dim);
-    let left_top = egui::pos2(rect.min.x, ui_crop.min.y.max(rect.min.y));
-    let left_bottom = egui::pos2(
-        ui_crop.min.x.max(rect.min.x),
-        ui_crop.max.y.min(rect.max.y),
+        0,
+        dim,
     );
+    let left_top = egui::pos2(rect.min.x, ui_crop.min.y.max(rect.min.y));
+    let left_bottom = egui::pos2(ui_crop.min.x.max(rect.min.x), ui_crop.max.y.min(rect.max.y));
     painter.rect_filled(Rect::from_two_pos(left_top, left_bottom), 0, dim);
     painter.rect_filled(
         Rect::from_two_pos(
@@ -457,11 +528,17 @@ pub fn crop_overlay(app: &mut GalleryApp, ui: &mut Ui, rect: Rect, source: [f32;
         let x = ui_crop.left() + ui_crop.width() * (thirds as f32 / 3.0);
         let y = ui_crop.top() + ui_crop.height() * (thirds as f32 / 3.0);
         painter.line_segment(
-            [egui::pos2(x, ui_crop.top()), egui::pos2(x, ui_crop.bottom())],
+            [
+                egui::pos2(x, ui_crop.top()),
+                egui::pos2(x, ui_crop.bottom()),
+            ],
             egui::Stroke::new(0.75, Color32::from_white_alpha(160)),
         );
         painter.line_segment(
-            [egui::pos2(ui_crop.left(), y), egui::pos2(ui_crop.right(), y)],
+            [
+                egui::pos2(ui_crop.left(), y),
+                egui::pos2(ui_crop.right(), y),
+            ],
             egui::Stroke::new(0.75, Color32::from_white_alpha(160)),
         );
     }
@@ -537,8 +614,7 @@ fn pick_handle(crop: Rect, pointer: egui::Pos2) -> Option<crate::crop::Handle> {
             return Some(handle);
         }
     }
-    crop.contains(pointer)
-        .then_some(crate::crop::Handle::Move)
+    crop.contains(pointer).then_some(crate::crop::Handle::Move)
 }
 
 fn screen_to_source(pointer: egui::Pos2, rect: Rect, scale: f32) -> [f32; 2] {
@@ -559,7 +635,7 @@ fn normalize_crop(state: &mut EditState, geometry: &CropGeom, crop: CropRect) {
 
 /// Eight-range HSL mixer: a hue-range chip row plus hue/saturation/luminance
 /// sliders for the selected range.
-fn hsl_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
+fn hsl_section(app: &mut GalleryApp, path: &std::path::Path, ui: &mut Ui) {
     let palette = app.palette;
     ui.horizontal_wrapped(|ui| {
         for (index, name) in crate::grade::HSL_NAMES.iter().enumerate() {
@@ -585,7 +661,12 @@ fn hsl_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
         w::hsv_color(base_hue, 0.8, 0.8),
         Color32::WHITE,
     ];
-    let range = &mut app.edits.entry(path.clone()).or_default().adjustments.hsl[index];
+    let range = &mut app
+        .edits
+        .entry(path.to_path_buf())
+        .or_default()
+        .adjustments
+        .hsl[index];
     let _ = w::slider_gradient(
         ui,
         &mut range.hue,
@@ -617,15 +698,34 @@ fn hsl_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
 
 /// Four-way split toning / color grading: shadow, midtone, highlight and global
 /// wheels with master blending and balance.
-fn grading_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
+fn grading_section(app: &mut GalleryApp, path: &std::path::Path, ui: &mut Ui) {
     let palette = app.palette;
-    let grading = &mut app.edits.entry(path.clone()).or_default().adjustments.color_grading;
+    let grading = &mut app
+        .edits
+        .entry(path.to_path_buf())
+        .or_default()
+        .adjustments
+        .color_grading;
     const LABELS: [&str; 4] = ["Shadows", "Midtones", "Highlights", "Global"];
     for (index, label) in LABELS.iter().enumerate() {
         let _ = w::color_wheel(ui, &mut grading.wheels[index], label, palette);
         ui.add_space(2.0);
     }
     ui.add_space(4.0);
-    let _ = w::slider(ui, &mut grading.blending, 0.0..=100.0, 1.0, "Blending", palette);
-    let _ = w::slider(ui, &mut grading.balance, -100.0..=100.0, 1.0, "Balance", palette);
+    let _ = w::slider(
+        ui,
+        &mut grading.blending,
+        0.0..=100.0,
+        1.0,
+        "Blending",
+        palette,
+    );
+    let _ = w::slider(
+        ui,
+        &mut grading.balance,
+        -100.0..=100.0,
+        1.0,
+        "Balance",
+        palette,
+    );
 }

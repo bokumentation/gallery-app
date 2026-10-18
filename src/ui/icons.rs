@@ -41,10 +41,20 @@ pub enum StrokeDef {
     Line([f32; 2], [f32; 2]),
     /// Open polyline; round caps and joins are added by the renderer.
     Poly(&'static [[f32; 2]]),
-    Circle { center: [f32; 2], radius: f32 },
+    Circle {
+        center: [f32; 2],
+        radius: f32,
+    },
     /// Filled dot (used for icon details such as the info “i”).
-    Dot { center: [f32; 2], radius: f32 },
-    Rect { xy: [f32; 2], wh: [f32; 2], rx: f32 },
+    Dot {
+        center: [f32; 2],
+        radius: f32,
+    },
+    Rect {
+        xy: [f32; 2],
+        wh: [f32; 2],
+        rx: f32,
+    },
     /// Arc in screen degrees (0° = east, positive = clockwise).
     Arc {
         center: [f32; 2],
@@ -221,12 +231,35 @@ const INFO: &[StrokeDef] = &[
     },
 ];
 
-const FOLDER: &[StrokeDef] =
-    &[StrokeDef::Poly(&[[3.0, 5.0], [8.0, 5.0], [10.0, 7.0], [21.0, 7.0], [21.0, 19.0], [3.0, 19.0], [3.0, 5.0]])];
+const FOLDER: &[StrokeDef] = &[StrokeDef::Poly(&[
+    [3.0, 5.0],
+    [8.0, 5.0],
+    [10.0, 7.0],
+    [21.0, 7.0],
+    [21.0, 19.0],
+    [3.0, 19.0],
+    [3.0, 5.0],
+])];
 
 const FOLDER_OPEN: &[StrokeDef] = &[
-    StrokeDef::Poly(&[[3.0, 19.0], [3.0, 5.0], [5.0, 3.0], [9.0, 3.0], [11.0, 5.0], [19.0, 5.0], [21.0, 7.0], [21.0, 10.0]]),
-    StrokeDef::Poly(&[[3.0, 19.0], [5.5, 11.0], [8.0, 9.0], [21.0, 9.0], [19.0, 19.0], [3.0, 19.0]]),
+    StrokeDef::Poly(&[
+        [3.0, 19.0],
+        [3.0, 5.0],
+        [5.0, 3.0],
+        [9.0, 3.0],
+        [11.0, 5.0],
+        [19.0, 5.0],
+        [21.0, 7.0],
+        [21.0, 10.0],
+    ]),
+    StrokeDef::Poly(&[
+        [3.0, 19.0],
+        [5.5, 11.0],
+        [8.0, 9.0],
+        [21.0, 9.0],
+        [19.0, 19.0],
+        [3.0, 19.0],
+    ]),
 ];
 
 const COPY: &[StrokeDef] = &[
@@ -235,7 +268,14 @@ const COPY: &[StrokeDef] = &[
         wh: [13.0, 13.0],
         rx: 2.0,
     },
-    StrokeDef::Poly(&[[4.0, 16.0], [3.0, 15.0], [3.0, 4.0], [4.0, 3.0], [15.0, 3.0], [16.0, 4.0]]),
+    StrokeDef::Poly(&[
+        [4.0, 16.0],
+        [3.0, 15.0],
+        [3.0, 4.0],
+        [4.0, 3.0],
+        [15.0, 3.0],
+        [16.0, 4.0],
+    ]),
 ];
 
 const ZOOM_IN: &[StrokeDef] = &[

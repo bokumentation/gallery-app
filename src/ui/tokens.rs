@@ -122,6 +122,9 @@ pub struct Palette {
     pub shadow: Color32,
     /// shadcn `input` (control outlines).
     pub input: Color32,
+    /// Muted scrollbar handle. Kept separate from `input` so the scroll thumb
+    /// can fade in at a low contrast without tinting ordinary controls.
+    pub scroll_handle: Color32,
     /// shadcn `ring` (focus outlines).
     pub ring: Color32,
     pub metrics: Metrics,
@@ -134,7 +137,7 @@ impl Palette {
             bg: Color32::from_rgb(9, 9, 11),        // zinc-950
             sidebar: Color32::from_rgb(17, 17, 19), // shadcn sidebar (dark)
             header: Color32::from_rgb(9, 9, 11),
-            card: Color32::from_rgb(24, 24, 27),    // zinc-900
+            card: Color32::from_rgb(24, 24, 27),       // zinc-900
             card_hover: Color32::from_rgb(39, 39, 42), // zinc-800 (accent)
             border: Color32::from_rgb(39, 39, 42),
             text: Color32::from_rgb(250, 250, 250), // zinc-50
@@ -145,7 +148,8 @@ impl Palette {
             error: Color32::from_rgb(248, 113, 113), // red-400
             shadow: Color32::from_black_alpha(120),
             input: Color32::from_rgb(39, 39, 42),
-            ring: Color32::from_rgb(212, 212, 216), // zinc-300
+            scroll_handle: Color32::from_rgb(82, 82, 91), // zinc-600
+            ring: Color32::from_rgb(212, 212, 216),       // zinc-300
             metrics: Metrics::default(),
         }
     }
@@ -158,16 +162,17 @@ impl Palette {
             header: Color32::from_rgb(255, 255, 255),
             card: Color32::from_rgb(248, 248, 249),
             card_hover: Color32::from_rgb(238, 238, 241), // zinc-100 (accent)
-            border: Color32::from_rgb(228, 228, 231),    // zinc-200
-            text: Color32::from_rgb(9, 9, 11),           // zinc-950
-            dim: Color32::from_rgb(113, 113, 122),       // zinc-500
-            accent: Color32::from_rgb(24, 24, 27),       // zinc-900 (primary)
+            border: Color32::from_rgb(228, 228, 231),     // zinc-200
+            text: Color32::from_rgb(9, 9, 11),            // zinc-950
+            dim: Color32::from_rgb(113, 113, 122),        // zinc-500
+            accent: Color32::from_rgb(24, 24, 27),        // zinc-900 (primary)
             accent_hover: Color32::from_rgb(39, 39, 42),
             on_accent: Color32::from_rgb(250, 250, 250),
             error: Color32::from_rgb(220, 38, 38), // red-600
             shadow: Color32::from_black_alpha(24),
             input: Color32::from_rgb(228, 228, 231),
-            ring: Color32::from_rgb(161, 161, 170), // zinc-400
+            scroll_handle: Color32::from_rgb(161, 161, 170), // zinc-400
+            ring: Color32::from_rgb(161, 161, 170),          // zinc-400
             metrics: Metrics::default(),
         }
     }

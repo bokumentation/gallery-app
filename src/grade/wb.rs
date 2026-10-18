@@ -76,14 +76,17 @@ fn primaries_to_xyz_matrix() -> [[f64; 3]; 3] {
     ];
     let white = xy_to_xyz(WP_D65);
     // invert3 works on row-major storage; convert the column triple.
-    let rows = [[cols[0][0], cols[1][0], cols[2][0]], [cols[0][1], cols[1][1], cols[2][1]], [cols[0][2], cols[1][2], cols[2][2]]];
+    let rows = [
+        [cols[0][0], cols[1][0], cols[2][0]],
+        [cols[0][1], cols[1][1], cols[2][1]],
+        [cols[0][2], cols[1][2], cols[2][2]],
+    ];
     let inverse = invert3(rows);
     // s = inverse * white.
     let mut s = [0.0f64; 3];
     for row in 0..3 {
-        s[row] = inverse[row][0] * white[0]
-            + inverse[row][1] * white[1]
-            + inverse[row][2] * white[2];
+        s[row] =
+            inverse[row][0] * white[0] + inverse[row][1] * white[1] + inverse[row][2] * white[2];
     }
     let mut matrix = [[0.0f64; 3]; 3];
     for (column, scale) in s.iter().enumerate() {
@@ -151,16 +154,34 @@ fn mul3(a: [[f64; 3]; 3], b: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
 
 fn invert3(matrix: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
     let (a, b, c, d, e, f, g, h, i2) = (
-        matrix[0][0], matrix[0][1], matrix[0][2],
-        matrix[1][0], matrix[1][1], matrix[1][2],
-        matrix[2][0], matrix[2][1], matrix[2][2],
+        matrix[0][0],
+        matrix[0][1],
+        matrix[0][2],
+        matrix[1][0],
+        matrix[1][1],
+        matrix[1][2],
+        matrix[2][0],
+        matrix[2][1],
+        matrix[2][2],
     );
     let det = a * (e * i2 - f * h) - b * (d * i2 - f * g) + c * (d * h - e * g);
     let inv_det = 1.0 / det;
     [
-        [(e * i2 - f * h) * inv_det, (c * h - b * i2) * inv_det, (b * f - c * e) * inv_det],
-        [(f * g - d * i2) * inv_det, (a * i2 - c * g) * inv_det, (c * d - a * f) * inv_det],
-        [(d * h - e * g) * inv_det, (b * g - a * h) * inv_det, (a * e - b * d) * inv_det],
+        [
+            (e * i2 - f * h) * inv_det,
+            (c * h - b * i2) * inv_det,
+            (b * f - c * e) * inv_det,
+        ],
+        [
+            (f * g - d * i2) * inv_det,
+            (a * i2 - c * g) * inv_det,
+            (c * d - a * f) * inv_det,
+        ],
+        [
+            (d * h - e * g) * inv_det,
+            (b * g - a * h) * inv_det,
+            (a * e - b * d) * inv_det,
+        ],
     ]
 }
 
@@ -225,9 +246,8 @@ impl WhiteBalance {
         // Bradford * xyz, row-major times vector.
         let mut out = [0.0f64; 3];
         for row in 0..3 {
-            out[row] = BRADFORD[row][0] * xyz[0]
-                + BRADFORD[row][1] * xyz[1]
-                + BRADFORD[row][2] * xyz[2];
+            out[row] =
+                BRADFORD[row][0] * xyz[0] + BRADFORD[row][1] * xyz[1] + BRADFORD[row][2] * xyz[2];
         }
         out
     }
@@ -278,9 +298,7 @@ mod tests {
                 + BRADFORD[row][2] * white[2];
         }
         for row in 0..3 {
-            let value = columns[row] as f64
-                + columns[3 + row] as f64
-                + columns[6 + row] as f64;
+            let value = columns[row] as f64 + columns[3 + row] as f64 + columns[6 + row] as f64;
             assert!(((value - expected[row]).abs()) < 1e-3, "row {row}");
         }
     }

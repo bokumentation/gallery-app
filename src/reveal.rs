@@ -129,16 +129,16 @@ mod tests {
     fn file_manager1_gets_a_show_items_call() {
         let specs = candidate_commands(Path::new("/photos/a b.jpg"));
         let gdbus = specs.iter().find(|spec| spec.program == "gdbus").unwrap();
-        assert_eq!(
-            gdbus.args[7],
-            "org.freedesktop.FileManager1.ShowItems"
-        );
+        assert_eq!(gdbus.args[7], "org.freedesktop.FileManager1.ShowItems");
         assert_eq!(gdbus.args[8], "['file:///photos/a%20b.jpg']");
         assert_eq!(gdbus.args[9], "");
     }
 
     #[test]
     fn file_uri_escapes_special_bytes() {
-        assert_eq!(file_uri(Path::new("/a/b c#d.jpg")), "file:///a/b%20c%23d.jpg");
+        assert_eq!(
+            file_uri(Path::new("/a/b c#d.jpg")),
+            "file:///a/b%20c%23d.jpg"
+        );
     }
 }

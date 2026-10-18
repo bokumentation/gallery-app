@@ -362,10 +362,7 @@ impl GradePass {
         if let Some(previous) = self.last.take() {
             self.release_texture(previous.id);
         }
-        self.last = Some(GradedTexture {
-            id,
-            key,
-        });
+        self.last = Some(GradedTexture { id, key });
         log::debug!(
             "grade pass {}x{} in {:.2} ms",
             out_size[0],
@@ -418,23 +415,20 @@ impl GradePass {
             has_lut_resident,
             lut_view,
         )?;
-        let texture = self
-            .core
-            .device
-            .create_texture(&wgpu::TextureDescriptor {
-                label: Some("grade-output-texture"),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
+        let texture = self.core.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("grade-output-texture"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         encoder.copy_buffer_to_texture(
             wgpu::TexelCopyBufferInfo {
@@ -458,11 +452,11 @@ impl GradePass {
             },
         );
         self.core.queue.submit(Some(encoder.finish()));
-        Ok(self
-            .render_state
-            .renderer
-            .write()
-            .register_native_texture(&self.core.device, &view, wgpu::FilterMode::Linear))
+        Ok(self.render_state.renderer.write().register_native_texture(
+            &self.core.device,
+            &view,
+            wgpu::FilterMode::Linear,
+        ))
     }
 }
 
@@ -550,8 +544,16 @@ fn pack_color(edit: &EditState, has_lut_resident: bool) -> [u8; COLOR_SIZE as us
     for (index, value) in gains.into_iter().enumerate() {
         put(&mut bytes, color_offset::WB_GAINS + index * 4, value);
     }
-    put(&mut bytes, color_offset::SATURATION, adjustments.saturation / 100.0);
-    put(&mut bytes, color_offset::VIBRANCE, adjustments.vibrance / 100.0);
+    put(
+        &mut bytes,
+        color_offset::SATURATION,
+        adjustments.saturation / 100.0,
+    );
+    put(
+        &mut bytes,
+        color_offset::VIBRANCE,
+        adjustments.vibrance / 100.0,
+    );
     let has_lut = has_lut_resident as u32 as f32;
     put(&mut bytes, color_offset::HAS_LUT, has_lut);
 

@@ -8,8 +8,10 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use wgpu::{Device, Queue};
 
-type GetMemoryProperties =
-    unsafe extern "system" fn(ash::vk::PhysicalDevice, *mut ash::vk::PhysicalDeviceMemoryProperties);
+type GetMemoryProperties = unsafe extern "system" fn(
+    ash::vk::PhysicalDevice,
+    *mut ash::vk::PhysicalDeviceMemoryProperties,
+);
 type GetDeviceProcAddr =
     unsafe extern "system" fn(ash::vk::Device, *const std::os::raw::c_char) -> *const c_void;
 type GetMemoryFd = unsafe extern "system" fn(
@@ -49,9 +51,8 @@ impl VulkanFns {
     }
 
     fn memory_fd(&self, device: ash::vk::Device) -> Result<GetMemoryFd, String> {
-        let pointer = unsafe {
-            (self.get_device_proc_addr)(device, b"vkGetMemoryFdKHR\0".as_ptr().cast())
-        };
+        let pointer =
+            unsafe { (self.get_device_proc_addr)(device, b"vkGetMemoryFdKHR\0".as_ptr().cast()) };
         if pointer.is_null() {
             return Err("vkGetMemoryFdKHR is unavailable".to_owned());
         }
@@ -215,16 +216,15 @@ impl ZeroCopyConverter {
 
         let hal_buffer = unsafe { wgpu_hal::vulkan::Buffer::from_raw(external.vk_buffer) };
         let wgpu_buffer = unsafe {
-            self.device
-                .create_buffer_from_hal::<wgpu_hal::api::Vulkan>(
-                    hal_buffer,
-                    &wgpu::BufferDescriptor {
-                        label: Some("zero-copy-source"),
-                        size: external.memory_size,
-                        usage: wgpu::BufferUsages::STORAGE,
-                        mapped_at_creation: false,
-                    },
-                )
+            self.device.create_buffer_from_hal::<wgpu_hal::api::Vulkan>(
+                hal_buffer,
+                &wgpu::BufferDescriptor {
+                    label: Some("zero-copy-source"),
+                    size: external.memory_size,
+                    usage: wgpu::BufferUsages::STORAGE,
+                    mapped_at_creation: false,
+                },
+            )
         };
 
         let allocation = ZeroCopyAllocation {
@@ -388,7 +388,7 @@ impl ZeroCopyConverter {
                 let buffer = match raw.create_buffer(&info, None) {
                     Ok(buffer) => buffer,
                     Err(error) => {
-                        return Err(format!("vkCreateBuffer: {error:?}")); 
+                        return Err(format!("vkCreateBuffer: {error:?}"));
                     }
                 };
                 let requirements = raw.get_buffer_memory_requirements(buffer);
@@ -412,13 +412,13 @@ impl ZeroCopyConverter {
                     Ok(memory) => memory,
                     Err(error) => {
                         raw.destroy_buffer(buffer, None);
-                        return Err(format!("vkAllocateMemory: {error:?}")); 
+                        return Err(format!("vkAllocateMemory: {error:?}"));
                     }
                 };
                 if let Err(error) = raw.bind_buffer_memory(buffer, memory, 0) {
                     raw.free_memory(memory, None);
                     raw.destroy_buffer(buffer, None);
-                    return Err(format!("vkBindBufferMemory: {error:?}")); 
+                    return Err(format!("vkBindBufferMemory: {error:?}"));
                 }
                 let get_fd = match vulkan.memory_fd(raw.handle()) {
                     Ok(get_fd) => get_fd,

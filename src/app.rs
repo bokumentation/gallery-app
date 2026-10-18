@@ -3,10 +3,10 @@ use crate::model::{is_image, ImageItem, SortKey, ThumbSize};
 use crate::scan::{spawn_scan, ScanOutcome};
 use crate::theme::{self, Palette, ThemeMode};
 use crate::thumbs::{human_size, ThumbnailStore};
-use crate::viewer::ViewerService;
 use crate::ui::actions::{ActionId, ActionSpec, ButtonStyle, Visibility};
 use crate::ui::layout::RightTab;
 use crate::ui::widgets as w;
+use crate::viewer::ViewerService;
 use crossbeam_channel::Receiver;
 use egui::{
     Align, Align2, Color32, CornerRadius, FontId, Frame, Id, Layout, Margin, Rect, RichText, Sense,
@@ -125,7 +125,7 @@ impl FolderNode {
                 children.push(FolderNode::new(path));
             }
         }
-        children.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        children.sort_by_key(|child| child.name.to_lowercase());
         self.has_subdirs = !children.is_empty();
         self.children = Some(children);
     }
@@ -201,9 +201,7 @@ impl GalleryApp {
             ),
             edit_panel_open: false,
             right_tab: RightTab::Edit,
-            edit_open: std::array::from_fn(|i| {
-                crate::ui::layout::EDIT_SECTIONS[i].default_open()
-            }),
+            edit_open: std::array::from_fn(|i| crate::ui::layout::EDIT_SECTIONS[i].default_open()),
             crop_active: false,
             crop_drag: None,
             lut_names: Vec::new(),
@@ -258,11 +256,7 @@ impl GalleryApp {
         self.scan_generation += 1;
         self.scanning = true;
         self.scan_elapsed = None;
-        self.scan_rx = Some(spawn_scan(
-            path,
-            self.recursive,
-            self.scan_generation,
-        ));
+        self.scan_rx = Some(spawn_scan(path, self.recursive, self.scan_generation));
     }
 
     fn expand_to(&mut self, path: &Path) {
@@ -298,7 +292,9 @@ impl GalleryApp {
             self.show_toast(format!("Cannot read {}", path.display()), true);
             return;
         };
-        let Some(name) = path.file_stem().map(|stem| stem.to_string_lossy().into_owned())
+        let Some(name) = path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
         else {
             return;
         };
@@ -322,7 +318,8 @@ impl GalleryApp {
     }
 
     /// Startup-time loading of the persisted LUT list (done in `new`); kept
-    fn pick_folder(&mut self) {        log::info!("folder picker: opening");
+    fn pick_folder(&mut self) {
+        log::info!("folder picker: opening");
         let mut dialog = rfd::FileDialog::new();
         if let Some(dir) = &self.current_dir {
             dialog = dialog.set_directory(dir);
@@ -492,15 +489,13 @@ impl GalleryApp {
     }
 
     fn handle_keys(&mut self, ctx: &egui::Context) {
-        let open_shortcut = ctx
-            .input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::O));
+        let open_shortcut = ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::O));
         if open_shortcut {
             self.pick_folder();
             return;
         }
 
-        let search_shortcut = ctx
-            .input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::F));
+        let search_shortcut = ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::F));
         if search_shortcut {
             if self.viewer_open {
                 self.close_viewer();
@@ -540,11 +535,10 @@ impl GalleryApp {
                 i.consume_key(egui::Modifiers::NONE, egui::Key::Plus)
                     || i.consume_key(egui::Modifiers::NONE, egui::Key::Equals)
             });
-            let zoom_out = ctx
-                .input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Minus));
+            let zoom_out =
+                ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Minus));
             let fit = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Num0));
-            let actual =
-                ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Num1));
+            let actual = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Num1));
             if zoom_in {
                 let base = self.zoom.unwrap_or(self.viewer_fit);
                 self.zoom = Some((base * 1.25).min(MAX_ZOOM));
@@ -566,8 +560,10 @@ impl GalleryApp {
                 self.zoom = Some(1.0);
                 self.pan = Vec2::ZERO;
             }
-            let left = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft));
-            let right = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight));
+            let left =
+                ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft));
+            let right =
+                ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight));
             if left {
                 self.step_viewer(-1);
             } else if right {
@@ -703,10 +699,7 @@ impl GalleryApp {
         // panels in between are flush and square, like VS Code / Zed.
         let header = Rect::from_min_max(
             rect.min,
-            egui::pos2(
-                rect.right(),
-                rect.top() + TITLE_BAR_HEIGHT + TOP_BAR_HEIGHT,
-            ),
+            egui::pos2(rect.right(), rect.top() + TITLE_BAR_HEIGHT + TOP_BAR_HEIGHT),
         );
         ui.painter().rect_filled(
             header,
@@ -756,10 +749,7 @@ impl GalleryApp {
         egui::Panel::top("title_bar")
             .exact_size(height)
             .show_separator_line(false)
-            .frame(
-                Frame::new()
-                    .inner_margin(Margin::symmetric(8, 0)),
-            )
+            .frame(Frame::new().inner_margin(Margin::symmetric(8, 0)))
             .show(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     let controls_width = 3.0 * 24.0 + 2.0 * 6.0 + 4.0;
@@ -772,11 +762,8 @@ impl GalleryApp {
                         egui::pos2(drag_rect.left() + 8.0, drag_rect.center().y),
                         Vec2::splat(16.0),
                     );
-                    ui.painter().rect_filled(
-                        icon_rect,
-                        CornerRadius::same(4),
-                        palette.accent,
-                    );
+                    ui.painter()
+                        .rect_filled(icon_rect, CornerRadius::same(4), palette.accent);
                     w::paint_icon(ui, w::Icon::Image, icon_rect.shrink(2.0), palette.on_accent);
 
                     let title = if self.viewer_open {
@@ -791,19 +778,16 @@ impl GalleryApp {
                             .map(display_name)
                             .unwrap_or_else(|| "Gallery".to_owned())
                     };
-                    ui.painter()
-                        .with_clip_rect(drag_rect)
-                        .text(
-                            egui::pos2(icon_rect.right() + 8.0, drag_rect.center().y),
-                            Align2::LEFT_CENTER,
-                            title,
-                            theme::bold_font(12.5),
-                            palette.text,
-                        );
+                    ui.painter().with_clip_rect(drag_rect).text(
+                        egui::pos2(icon_rect.right() + 8.0, drag_rect.center().y),
+                        Align2::LEFT_CENTER,
+                        title,
+                        theme::bold_font(12.5),
+                        palette.text,
+                    );
 
                     if drag.drag_started() {
-                        ui.ctx()
-                            .send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
                     }
                     if drag.double_clicked() {
                         let maximized = window_maximized(ui);
@@ -813,14 +797,9 @@ impl GalleryApp {
 
                     let maximized = window_maximized(ui);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if window_control(
-                            ui,
-                            w::Icon::Close,
-                            WindowControl::Close,
-                            palette,
-                        )
-                        .on_hover_text("Close")
-                        .clicked()
+                        if window_control(ui, w::Icon::Close, WindowControl::Close, palette)
+                            .on_hover_text("Close")
+                            .clicked()
                         {
                             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                         }
@@ -836,14 +815,9 @@ impl GalleryApp {
                             ui.ctx()
                                 .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
                         }
-                        if window_control(
-                            ui,
-                            w::Icon::Minimize,
-                            WindowControl::Normal,
-                            palette,
-                        )
-                        .on_hover_text("Minimize")
-                        .clicked()
+                        if window_control(ui, w::Icon::Minimize, WindowControl::Normal, palette)
+                            .on_hover_text("Minimize")
+                            .clicked()
                         {
                             ui.ctx()
                                 .send_viewport_cmd(egui::ViewportCommand::Minimized(true));
@@ -948,10 +922,7 @@ impl GalleryApp {
         let palette = self.palette;
         egui::Panel::top("top_bar")
             .exact_size(TOP_BAR_HEIGHT)
-            .frame(
-                Frame::new()
-                    .inner_margin(Margin::symmetric(8, 4)),
-            )
+            .frame(Frame::new().inner_margin(Margin::symmetric(8, 4)))
             .show(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     if w::icon_button(ui, Icon::Menu, palette)
@@ -981,10 +952,7 @@ impl GalleryApp {
             return;
         }
         let active = self.action_active(spec.id);
-        let is_toggle = matches!(
-            spec.id,
-            ActionId::Sliders | ActionId::Info | ActionId::Crop
-        );
+        let is_toggle = matches!(spec.id, ActionId::Sliders | ActionId::Info | ActionId::Crop);
         let response = match spec.style {
             ButtonStyle::Primary => match spec.icon {
                 Some(icon) => w::accent_icon_button(ui, icon, palette),
@@ -1153,12 +1121,9 @@ impl GalleryApp {
                             );
                             if let Some(dimensions) = self.viewer.source_dimensions(&item.path) {
                                 ui.label(
-                                    RichText::new(format!(
-                                        "{} × {}",
-                                        dimensions[0], dimensions[1]
-                                    ))
-                                    .size(theme::TEXT_SMALL)
-                                    .color(palette.dim),
+                                    RichText::new(format!("{} × {}", dimensions[0], dimensions[1]))
+                                        .size(theme::TEXT_SMALL)
+                                        .color(palette.dim),
                                 );
                             }
                             ui.label(
@@ -1229,14 +1194,9 @@ impl GalleryApp {
                         if self.viewer_open {
                             let fit = self.viewer_fit.max(0.001);
                             let mut scale = self.zoom.unwrap_or(fit).clamp(fit, MAX_ZOOM);
-                            if w::status_icon_button(
-                                ui,
-                                w::Icon::Maximize,
-                                false,
-                                palette,
-                            )
-                            .on_hover_text("Fit to window")
-                            .clicked()
+                            if w::status_icon_button(ui, w::Icon::Maximize, false, palette)
+                                .on_hover_text("Fit to window")
+                                .clicked()
                             {
                                 self.zoom = None;
                                 self.pan = Vec2::ZERO;
@@ -1275,14 +1235,9 @@ impl GalleryApp {
                                     Some(scale)
                                 };
                             }
-                            if w::status_icon_button(
-                                ui,
-                                w::Icon::ZoomOut,
-                                false,
-                                palette,
-                            )
-                            .on_hover_text("Zoom out")
-                            .clicked()
+                            if w::status_icon_button(ui, w::Icon::ZoomOut, false, palette)
+                                .on_hover_text("Zoom out")
+                                .clicked()
                             {
                                 let next = (scale / 1.25).max(fit);
                                 self.zoom = if (next - fit).abs() < 0.001 {
@@ -1327,23 +1282,22 @@ impl GalleryApp {
 
                 let mut clicked = None;
                 let selected = self.selected_folder.clone();
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .scroll_bar_visibility(
-                        egui::scroll_area::ScrollBarVisibility::AlwaysVisible,
-                    )
-                    .show(ui, |ui| {
-                        let expanded = &mut self.expanded;
-                        tree_node_ui(
-                            ui,
-                            &mut self.root,
-                            expanded,
-                            selected.as_deref(),
-                            palette,
-                            0,
-                            &mut clicked,
-                        );
-                    });
+                theme::with_scroll_handle(ui, palette, |ui| {
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            let expanded = &mut self.expanded;
+                            tree_node_ui(
+                                ui,
+                                &mut self.root,
+                                expanded,
+                                selected.as_deref(),
+                                palette,
+                                0,
+                                &mut clicked,
+                            );
+                        });
+                });
                 if let Some(path) = clicked {
                     self.navigate(path);
                 }
@@ -1466,7 +1420,6 @@ impl GalleryApp {
         }
     }
 
-
     fn header_sort(&mut self, ui: &mut Ui, palette: Palette) {
         let mut toggled = false;
         let mut flipped = false;
@@ -1550,7 +1503,7 @@ impl GalleryApp {
             return;
         }
 
-        let width = (ui.available_width() - 7.0).max(1.0);
+        let width = ui.available_width();
         let cell = self.thumb_size.px();
         let columns = (((width - metrics.grid_pad * 2.0 + metrics.grid_gap)
             / (cell + metrics.grid_gap))
@@ -1571,68 +1524,61 @@ impl GalleryApp {
         let selection = self.selection;
 
         ui.add_space(2.0);
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .scroll_bar_visibility(
-                egui::scroll_area::ScrollBarVisibility::AlwaysVisible,
-            )
-            .show_rows(ui, row_stride, rows, |ui, row_range| {
-                let base = ui.max_rect();
-                let first_row = row_range.start;
-                for row in row_range {
-                    let top = base.top() + (row - first_row) as f32 * row_stride;
-                    for column in 0..columns {
-                        let index = row * columns + column;
-                        if index >= count {
-                            break;
-                        }
-                        let item_index = self.visible[index];
-                        let item = &self.all_items[item_index];
-                        let path = item.path.clone();
-                        let name = item.name.clone();
+        theme::with_scroll_handle(ui, palette, |ui| {
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show_rows(ui, row_stride, rows, |ui, row_range| {
+                    let base = ui.max_rect();
+                    let first_row = row_range.start;
+                    for row in row_range {
+                        let top = base.top() + (row - first_row) as f32 * row_stride;
+                        for column in 0..columns {
+                            let index = row * columns + column;
+                            if index >= count {
+                                break;
+                            }
+                            let item_index = self.visible[index];
+                            let item = &self.all_items[item_index];
+                            let path = item.path.clone();
+                            let name = item.name.clone();
 
-                        let left = base.left()
-                            + metrics.grid_pad
-                            + column as f32 * (cell_width + metrics.grid_gap);
-                        let cell_rect =
-                            Rect::from_min_size(egui::pos2(left, top), Vec2::splat(cell_width));
-                        let response = ui.interact(
-                            cell_rect,
-                            Id::unique(("thumb", index, &path)),
-                            Sense::click(),
-                        );
+                            let left = base.left()
+                                + metrics.grid_pad
+                                + column as f32 * (cell_width + metrics.grid_gap);
+                            let cell_rect =
+                                Rect::from_min_size(egui::pos2(left, top), Vec2::splat(cell_width));
+                            let response = ui.interact(
+                                cell_rect,
+                                Id::unique(("thumb", index, &path)),
+                                Sense::click(),
+                            );
 
-                        let thumbnail = self
-                            .thumbs
-                            .get(&path)
-                            .map(|thumb| (thumb.texture.id(), thumb.size));
-                        if thumbnail.is_none() {
-                            self.thumbs.request(&path);
-                        }
+                            let thumbnail = self
+                                .thumbs
+                                .get(&path)
+                                .map(|thumb| (thumb.texture.id(), thumb.size));
+                            if thumbnail.is_none() {
+                                self.thumbs.request(&path);
+                            }
 
-                        let selected = selection == Some(index);
-                        draw_cell(
-                            ui,
-                            cell_rect,
-                            &response,
-                            palette,
-                            thumbnail,
-                            &name,
-                            selected,
-                        );
+                            let selected = selection == Some(index);
+                            draw_cell(
+                                ui, cell_rect, &response, palette, thumbnail, &name, selected,
+                            );
 
-                        if selected && scroll_to {
-                            ui.scroll_to_rect(cell_rect, Some(Align::Center));
-                        }
+                            if selected && scroll_to {
+                                ui.scroll_to_rect(cell_rect, Some(Align::Center));
+                            }
 
-                        if response.double_clicked() {
-                            open_request = Some(index);
-                        } else if response.clicked() {
-                            select_request = Some(index);
+                            if response.double_clicked() {
+                                open_request = Some(index);
+                            } else if response.clicked() {
+                                select_request = Some(index);
+                            }
                         }
                     }
-                }
-            });
+                });
+        });
 
         ui.add_space(10.0);
         self.scroll_to_selection = false;
@@ -1653,8 +1599,7 @@ impl GalleryApp {
             Layout::centered_and_justified(egui::Direction::TopDown),
             |ui| {
                 ui.vertical_centered(|ui| {
-                    let (icon_rect, _) =
-                        ui.allocate_exact_size(Vec2::splat(54.0), Sense::hover());
+                    let (icon_rect, _) = ui.allocate_exact_size(Vec2::splat(54.0), Sense::hover());
                     w::paint_folder_icon(ui, icon_rect.shrink(6.0), palette.dim);
 
                     if self.current_dir.is_none() {
@@ -1719,10 +1664,10 @@ impl GalleryApp {
             .inner_margin(Margin::symmetric(0, 4))
             .show(ui, |ui| {
                 let tools = crate::ui::actions::MIDDLE_ACTIONS;
-                let tools_width = tools.len() as f32 * 26.0
-                    + tools.len().saturating_sub(1) as f32 * 6.0;
+                let tools_width =
+                    tools.len() as f32 * 26.0 + tools.len().saturating_sub(1) as f32 * 6.0;
                 let show_identity = ui.available_width() >= 560.0;
-                ui.horizontal_centered(|ui| {
+                ui.horizontal(|ui| {
                     if w::flat_button(ui, "‹  Back", palette).clicked() {
                         self.close_viewer();
                     }
@@ -1806,11 +1751,7 @@ impl GalleryApp {
         }
         // Ask for a higher-resolution decode only in coarse zoom steps, so
         // wheel zooming does not thrash the loader.
-        let target = viewer_target(
-            stage,
-            ui.ctx().pixels_per_point(),
-            (scale / fit).max(1.0),
-        );
+        let target = viewer_target(stage, ui.ctx().pixels_per_point(), (scale / fit).max(1.0));
         self.viewer.set_target(&item.path, target);
 
         let next_index = (self.viewer_index + 1) % self.visible.len();
@@ -1837,14 +1778,10 @@ impl GalleryApp {
             {
                 if let Some(source) = dimensions {
                     if !preview.is_identity() {
-                        if let Some(graded) = self.grade.ensure(
-                            &item.path,
-                            &base_view,
-                            base_id,
-                            base_size,
-                            source,
-                            &preview,
-                        ) {
+                        if let Some(graded) = self
+                            .grade
+                            .ensure(&item.path, &base_view, base_id, base_size, source, &preview)
+                        {
                             texture_id = Some(graded);
                         }
                     }
@@ -1906,16 +1843,11 @@ impl GalleryApp {
         } else {
             if let Some((texture_id, size)) = thumbnail {
                 let texture_size = Vec2::new(size[0].max(1) as f32, size[1].max(1) as f32);
-                let scale = (available.width() / texture_size.x)
-                    .min(available.height() / texture_size.y);
+                let scale =
+                    (available.width() / texture_size.x).min(available.height() / texture_size.y);
                 let scaled = texture_size * scale.max(0.01);
                 let rect = Rect::from_center_size(available.center(), scaled);
-                draw_texture(
-                    ui,
-                    texture_id,
-                    rect,
-                    Color32::from_white_alpha(225),
-                );
+                draw_texture(ui, texture_id, rect, Color32::from_white_alpha(225));
             }
 
             let spinner = egui::pos2(stage.right() - 28.0, stage.top() + 28.0);
@@ -1929,7 +1861,11 @@ impl GalleryApp {
     /// Wheel zoom at the cursor, drag pan, and double-click Fit/100%. Only
     /// active when the crop overlay is not owning the pointer.
     fn viewer_canvas_input(&mut self, ui: &mut Ui, available: Rect, fit: f32, scale: f32) {
-        let response = ui.interact(available, Id::unique("viewer-canvas"), Sense::click_and_drag());
+        let response = ui.interact(
+            available,
+            Id::unique("viewer-canvas"),
+            Sense::click_and_drag(),
+        );
         if response.double_clicked() {
             if self.zoom.is_none() {
                 self.zoom = Some(1.0f32.max(fit));
@@ -2015,10 +1951,7 @@ impl GalleryApp {
         egui::Area::new(Id::unique("toast"))
             .anchor(
                 Align2::LEFT_BOTTOM,
-                Vec2::new(
-                    18.0,
-                    -(palette.metrics.bottom_bar_h + 12.0),
-                ),
+                Vec2::new(18.0, -(palette.metrics.bottom_bar_h + 12.0)),
             )
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
@@ -2033,20 +1966,17 @@ impl GalleryApp {
                         color: palette.shadow,
                     })
                     .show(ui, |ui| {
-                        ui.label(
-                            RichText::new(&toast.message)
-                                .size(theme::TEXT_SMALL)
-                                .color(if toast.error {
-                                    Color32::WHITE
-                                } else {
-                                    palette.text
-                                }),
-                        );
+                        ui.label(RichText::new(&toast.message).size(theme::TEXT_SMALL).color(
+                            if toast.error {
+                                Color32::WHITE
+                            } else {
+                                palette.text
+                            },
+                        ));
                     });
             });
         ctx.request_repaint_after(Duration::from_millis(200));
     }
-
 }
 
 impl eframe::App for GalleryApp {
@@ -2147,8 +2077,7 @@ fn sidebar_row(
         } else {
             Color32::TRANSPARENT
         };
-        ui.painter()
-            .rect_filled(rect, CornerRadius::same(3), fill);
+        ui.painter().rect_filled(rect, CornerRadius::same(3), fill);
         let content = palette.text;
         let mut text_x = rect.left() + 8.0;
         if icon {
@@ -2205,12 +2134,16 @@ fn tree_node_ui(
         } else {
             Color32::TRANSPARENT
         };
-        ui.painter()
-            .rect_filled(rect, CornerRadius::same(3), fill);
+        ui.painter().rect_filled(rect, CornerRadius::same(3), fill);
         let content = palette.text;
 
         if node.has_subdirs {
-            paint_chevron(ui, chevron_rect.center(), is_expanded, content.gamma_multiply(0.8));
+            paint_chevron(
+                ui,
+                chevron_rect.center(),
+                is_expanded,
+                content.gamma_multiply(0.8),
+            );
         }
 
         let icon_rect = Rect::from_min_size(
@@ -2245,9 +2178,7 @@ fn tree_node_ui(
         node.ensure_loaded();
         if let Some(children) = node.children.as_mut() {
             for child in children {
-                tree_node_ui(
-                    ui, child, expanded, selected, palette, depth + 1, clicked,
-                );
+                tree_node_ui(ui, child, expanded, selected, palette, depth + 1, clicked);
             }
         }
     }

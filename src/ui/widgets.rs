@@ -47,11 +47,15 @@ pub fn accent_button(ui: &mut Ui, label: &str, palette: Palette) -> Response {
 pub fn toggle_button(ui: &mut Ui, label: &str, selected: bool, palette: Palette) -> Response {
     let m = palette.metrics;
     ui.add(
-        Button::new(RichText::new(label).size(theme::TEXT_SMALL).color(if selected {
-            palette.on_accent
-        } else {
-            palette.text
-        }))
+        Button::new(
+            RichText::new(label)
+                .size(theme::TEXT_SMALL)
+                .color(if selected {
+                    palette.on_accent
+                } else {
+                    palette.text
+                }),
+        )
         .fill(if selected {
             palette.accent
         } else {
@@ -69,24 +73,25 @@ pub fn toggle_button(ui: &mut Ui, label: &str, selected: bool, palette: Palette)
 
 pub fn symbol_button(ui: &mut Ui, glyph: &str, palette: Palette) -> Response {
     let m = palette.metrics;
-    let response = ui.scope(|ui| {
-        let widgets = &mut ui.style_mut().visuals.widgets;
-        widgets.inactive.bg_fill = Color32::TRANSPARENT;
-        widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
-        widgets.inactive.bg_stroke = Stroke::NONE;
-        widgets.hovered.bg_fill = palette.card_hover;
-        widgets.hovered.weak_bg_fill = palette.card_hover;
-        widgets.hovered.bg_stroke = Stroke::NONE;
-        widgets.active.bg_fill = palette.card_hover;
-        widgets.active.weak_bg_fill = palette.card_hover;
-        ui.add(
-            Button::new(RichText::new(glyph).size(17.0).color(palette.text))
-                .frame(true)
-                .min_size(Vec2::splat(m.control_h_sm))
-                .corner_radius(m.radius_md),
-        )
-    })
-    .inner;
+    let response = ui
+        .scope(|ui| {
+            let widgets = &mut ui.style_mut().visuals.widgets;
+            widgets.inactive.bg_fill = Color32::TRANSPARENT;
+            widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+            widgets.inactive.bg_stroke = Stroke::NONE;
+            widgets.hovered.bg_fill = palette.card_hover;
+            widgets.hovered.weak_bg_fill = palette.card_hover;
+            widgets.hovered.bg_stroke = Stroke::NONE;
+            widgets.active.bg_fill = palette.card_hover;
+            widgets.active.weak_bg_fill = palette.card_hover;
+            ui.add(
+                Button::new(RichText::new(glyph).size(17.0).color(palette.text))
+                    .frame(true)
+                    .min_size(Vec2::splat(m.control_h_sm))
+                    .corner_radius(m.radius_md),
+            )
+        })
+        .inner;
     response
 }
 
@@ -99,9 +104,7 @@ pub fn switch(ui: &mut Ui, on: &mut bool, palette: Palette) -> Response {
         response.mark_changed();
     }
 
-    let animation = ui
-        .ctx()
-        .animate_bool_with_time(response.id, *on, 0.12);
+    let animation = ui.ctx().animate_bool_with_time(response.id, *on, 0.12);
     let background = if *on { palette.accent } else { palette.input };
     let radius = (m.switch_h * 0.5) as u8;
     ui.painter()
@@ -170,11 +173,10 @@ pub fn color_wheel(
         // The layout already inserts `item_spacing` between the two cells;
         // adding an explicit gap would make the row wider than the panel.
         ui.spacing_mut().item_spacing.x = gap;
-        let wheel_response = ui.allocate_ui_with_layout(
-            Vec2::splat(wheel),
-            Layout::top_down(Align::Center),
-            |ui| wheel_pad(ui, value, palette),
-        );
+        let wheel_response =
+            ui.allocate_ui_with_layout(Vec2::splat(wheel), Layout::top_down(Align::Center), |ui| {
+                wheel_pad(ui, value, palette)
+            });
         changed |= wheel_response.inner;
         let controls = ui.allocate_ui_with_layout(
             Vec2::new(control_w, wheel),
@@ -187,10 +189,8 @@ pub fn color_wheel(
                         .color(palette.dim),
                 );
                 let tint = hsv_rgb(value.hue, (value.saturation / 100.0).clamp(0.0, 1.0), 1.0);
-                let (chip, _) = ui.allocate_exact_size(
-                    Vec2::new(control_w.min(60.0), 5.0),
-                    Sense::hover(),
-                );
+                let (chip, _) =
+                    ui.allocate_exact_size(Vec2::new(control_w.min(60.0), 5.0), Sense::hover());
                 ui.painter().rect_filled(chip, CornerRadius::same(2), tint);
                 ui.add_space(1.0);
                 slider_compact(
@@ -254,8 +254,7 @@ fn wheel_pad(ui: &mut Ui, value: &mut crate::grade::HslRange, palette: Palette) 
                 let hue = delta.y.atan2(delta.x).to_degrees();
                 value.hue = hue.rem_euclid(360.0);
             }
-            value.saturation =
-                (((dist - inner) / (outer - inner)) * 100.0).clamp(0.0, 100.0);
+            value.saturation = (((dist - inner) / (outer - inner)) * 100.0).clamp(0.0, 100.0);
             changed = true;
         }
     }
@@ -317,6 +316,7 @@ fn paint_gradient_rail(ui: &Ui, rect: Rect, colors: &[Color32]) {
 
 /// Draw one full-width track and handle all pointer/keyboard interaction.
 /// Returns true when the value changed.
+#[allow(clippy::too_many_arguments)] // shared preset parameters keep the slider variants explicit
 fn slider_track(
     ui: &mut Ui,
     value: &mut f32,
@@ -332,10 +332,7 @@ fn slider_track(
     let width = ui.available_width().max(60.0);
     let (rect, response) =
         ui.allocate_exact_size(Vec2::new(width, height), Sense::click_and_drag());
-    let rail = Rect::from_center_size(
-        rect.center(),
-        Vec2::new((width - 12.0).max(20.0), 3.0),
-    );
+    let rail = Rect::from_center_size(rect.center(), Vec2::new((width - 12.0).max(20.0), 3.0));
     let range = (max - min).max(f32::EPSILON);
     let value_t = ((*value - min) / range).clamp(0.0, 1.0);
     let origin_t = ((default - min) / range).clamp(0.0, 1.0);
@@ -366,11 +363,8 @@ fn slider_track(
     } else {
         5.5
     };
-    ui.painter().circle_filled(
-        egui::pos2(thumb_x, rail.center().y),
-        radius,
-        palette.accent,
-    );
+    ui.painter()
+        .circle_filled(egui::pos2(thumb_x, rail.center().y), radius, palette.accent);
     ui.painter().circle_stroke(
         egui::pos2(thumb_x, rail.center().y),
         radius,
@@ -420,8 +414,7 @@ fn slider_track(
         {
             *value = (*value - key_step).clamp(min, max);
         }
-        if ui.input(|input| input.key_pressed(Key::ArrowRight) || input.key_pressed(Key::ArrowUp))
-        {
+        if ui.input(|input| input.key_pressed(Key::ArrowRight) || input.key_pressed(Key::ArrowUp)) {
             *value = (*value + key_step).clamp(min, max);
         }
     }
@@ -499,11 +492,9 @@ fn slider_impl(
         }
 
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let (rect, response) =
-                ui.allocate_exact_size(Vec2::new(54.0, 18.0), Sense::click());
-            let mut state = ui.data_mut(|data| {
-                data.get_temp::<SliderEdit>(edit_id).unwrap_or_default()
-            });
+            let (rect, response) = ui.allocate_exact_size(Vec2::new(54.0, 18.0), Sense::click());
+            let mut state =
+                ui.data_mut(|data| data.get_temp::<SliderEdit>(edit_id).unwrap_or_default());
 
             if state.editing {
                 let field_id = id.with("value-field");
@@ -560,16 +551,7 @@ fn slider_impl(
         *value = default;
     }
     changed |= slider_track(
-        ui,
-        value,
-        min,
-        max,
-        step,
-        default,
-        palette,
-        gradient,
-        14.0,
-        id,
+        ui, value, min, max, step, default, palette, gradient, 14.0, id,
     );
     ui.spacing_mut().item_spacing.y = previous_spacing;
     changed || reset
@@ -704,11 +686,8 @@ pub fn search_field(ui: &mut Ui, text: &mut String, width: f32, palette: Palette
         );
         let response = ui.interact(clear_rect, Id::unique("search-clear"), Sense::click());
         if response.hovered() {
-            ui.painter().circle_filled(
-                clear_rect.center(),
-                9.0,
-                palette.card_hover,
-            );
+            ui.painter()
+                .circle_filled(clear_rect.center(), 9.0, palette.card_hover);
         }
         ui.painter().text(
             clear_rect.center(),
@@ -791,11 +770,9 @@ pub fn section_card(
             palette.text,
         );
 
-        let t = ui.ctx().animate_bool_with_time(
-            ui.make_persistent_id("section-chevron"),
-            *open,
-            0.14,
-        );
+        let t =
+            ui.ctx()
+                .animate_bool_with_time(ui.make_persistent_id("section-chevron"), *open, 0.14);
         let center = egui::pos2(rect.right() - 10.0, rect.center().y);
         let closed = [(-1.5, -3.5), (1.5, 0.0), (-1.5, 3.5)];
         let opened = [(-3.5, -1.5), (0.0, 1.5), (3.5, -1.5)];
@@ -836,8 +813,7 @@ pub fn tabs(ui: &mut Ui, options: &[(&str, bool)], palette: Palette) -> Option<u
         ui.spacing_mut().item_spacing.x = 2.0;
         for (index, (label, active)) in options.iter().enumerate() {
             let width = 62.0;
-            let (rect, response) =
-                ui.allocate_exact_size(Vec2::new(width, 26.0), Sense::click());
+            let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 26.0), Sense::click());
             if *active {
                 ui.painter().rect_filled(
                     Rect::from_min_max(
@@ -873,19 +849,11 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, palette: Palette) -> Response {
 
 /// 20 px status-bar button. Keeps the bottom bar compact without shrinking the
 /// normal toolbar hit targets.
-pub fn status_icon_button(
-    ui: &mut Ui,
-    icon: Icon,
-    active: bool,
-    palette: Palette,
-) -> Response {
+pub fn status_icon_button(ui: &mut Ui, icon: Icon, active: bool, palette: Palette) -> Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(20.0), Sense::click());
     if active || response.hovered() || response.is_pointer_button_down_on() {
-        ui.painter().rect_filled(
-            rect,
-            CornerRadius::same(3),
-            palette.card_hover,
-        );
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(3), palette.card_hover);
     }
     paint_icon(
         ui,
@@ -913,18 +881,10 @@ pub fn accent_icon_button(ui: &mut Ui, icon: Icon, palette: Palette) -> Response
 
 /// Ghost icon button that shows the accent surface when `active`, used for
 /// panel tabs (shadcn `ghost` with `data-state=active`).
-pub fn toggle_icon_button(
-    ui: &mut Ui,
-    icon: Icon,
-    active: bool,
-    palette: Palette,
-) -> Response {
+pub fn toggle_icon_button(ui: &mut Ui, icon: Icon, active: bool, palette: Palette) -> Response {
     let m = palette.metrics;
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(m.icon_button), Sense::click());
-    if active {
-        ui.painter()
-            .rect_filled(rect, CornerRadius::same(m.radius_md), palette.card_hover);
-    } else if response.hovered() || response.is_pointer_button_down_on() {
+    if active || response.hovered() || response.is_pointer_button_down_on() {
         ui.painter()
             .rect_filled(rect, CornerRadius::same(m.radius_md), palette.card_hover);
     }

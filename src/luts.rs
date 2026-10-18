@@ -76,8 +76,7 @@ impl CubeLut {
         }
 
         let size = size?;
-        (data.len() == (size * size * size * 4) as usize)
-            .then(|| CubeLut { name, size, data })
+        (data.len() == (size * size * size * 4) as usize).then(|| CubeLut { name, size, data })
     }
 
     /// Persistent store: `~/.cache/rust-gallery/luts/*.cube`.
@@ -96,7 +95,9 @@ impl CubeLut {
             .filter_map(|entry| {
                 let name = entry.file_name().to_string_lossy().into_owned();
                 let lower = name.to_lowercase();
-                lower.ends_with(".cube").then(|| name[..name.len() - 5].to_owned())
+                lower
+                    .ends_with(".cube")
+                    .then(|| name[..name.len() - 5].to_owned())
             })
             .collect::<Vec<_>>();
         names.sort();
