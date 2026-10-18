@@ -25,12 +25,12 @@ Browse:
 
 Edit (right-side adjust panel, RapidRAW-style layout):
 
-- Top toolbar doubles as a GNOME/libadwaita-style header bar (native
-  decorations disabled): rotate ⟲/⟳ 90° steps, flip H/V, crop toggle, adjust
-  toggle, copy path, image-info toggle, open-in-file-manager (opens the folder
-  and selects the image when the desktop supports FileManager1), accent Export,
-  and window minimize/maximize/close controls; drag the bar to move the window,
-  double-click to maximize. The bottom bar shows filename, dimensions and size
+- Native GNOME window decorations (Mutter on Wayland, or the X11 window
+  manager), with the app toolbar for rotate ⟲/⟳ 90° steps, flip H/V, crop
+  toggle, adjust toggle, copy path, image-info toggle, open-in-file-manager
+  (opens the folder and selects the image when the desktop supports
+  FileManager1), and an accent Export button; the bottom bar shows filename,
+  dimensions and size
 - Zoom and pan: wheel zooms at the cursor, drag pans, double-click toggles
   Fit ↔ 100%, with a floating bottom-right control (zoom out / percentage /
   zoom in / fit); keys `+` `-` `0` `1`
@@ -133,7 +133,7 @@ context in a worker thread at app startup, so it does not block the UI.
 - `src/ui/edit_panel.rs` — right adjust panel sections, crop overlay
 - `src/ui/info_panel.rs` — Image Info tab (path, dimensions, size, format, modified, edit summary)
 - `src/ui/widgets.rs` — shadcn-styled buttons, icon buttons, switch, sliders, tabs/chips, color wheels
-- `src/app.rs` — application state, layout, grid/viewer, zoom/pan, keyboard handling, header bar, CSD window controls and edge resizing
+- `src/app.rs` — application state, layout, grid/viewer, zoom/pan, keyboard handling, toolbar
 - `src/grade/mod.rs` — `EditState` (crop/aspect/orientation/adjustments/HSL/grading/LUT)
 - `src/grade/gpu.rs` — `GradeCore`/`GradePass`: WGSL grading compute pipeline, uniforms, LUT registry
 - `src/grade/shader.wgsl` — geometry + color pipeline, ported math from RapidRAW

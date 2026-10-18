@@ -153,6 +153,9 @@ pub fn apply(ctx: &egui::Context, palette: Palette) {
         style.spacing.menu_margin = Margin::same(m.space_sm as i8);
         style.spacing.indent = 16.0;
         style.spacing.interact_size = egui::vec2(m.icon_button, m.control_h_md);
+        // Fixed track width so a slider's changing value text cannot reflow the
+        // surrounding panel row.
+        style.spacing.slider_width = 116.0;
         style.text_styles = [
             (TextStyle::Heading, bold_font(20.0)),
             (TextStyle::Body, FontId::proportional(15.0)),

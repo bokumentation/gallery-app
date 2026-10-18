@@ -70,11 +70,7 @@ fn main() -> eframe::Result<()> {
             .with_inner_size([1400.0, 900.0])
             .with_min_inner_size([880.0, 560.0])
             .with_title("Gallery")
-            .with_app_id("gallery-app")
-            // The app draws a GNOME/libadwaita-style header bar in place of
-            // native decorations; window controls and edge resizing are handled
-            // in `GalleryApp`.
-            .with_decorations(false),
+            .with_app_id("gallery-app"),
         renderer: eframe::Renderer::Wgpu,
         wgpu_options,
         centered: true,

@@ -3,8 +3,8 @@ pub use crate::ui::icons::{
     paint_folder_icon, paint_icon, paint_image_icon, paint_search_icon, Icon,
 };
 use egui::{
-    Button, Color32, CornerRadius, FontId, Frame, Id, Margin, Rect, Response, RichText, Sense,
-    Stroke, StrokeKind, TextEdit, Ui, Vec2,
+    Align, Button, Color32, CornerRadius, FontId, Frame, Id, Layout, Margin, Rect, Response,
+    RichText, Sense, Stroke, StrokeKind, TextEdit, Ui, Vec2,
 };
 
 pub const SEARCH_ID: &str = "gallery-search";
@@ -195,69 +195,92 @@ pub fn color_wheel(
     label: &str,
     palette: Palette,
 ) -> bool {
-    let mut changed = false;
     let m = palette.metrics;
+    let wheel = m.wheel_size;
+    let gap = m.space_sm;
+    // Fixed columns: the wheel and the controls never reflow while dragging.
+    let control_w = (ui.available_width() - wheel - gap).max(130.0);
+    let mut changed = false;
     ui.horizontal(|ui| {
-        ui.vertical(|ui| {
-            let size = Vec2::splat(m.wheel_size);
-            let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
-            let center = rect.center();
-            let outer = rect.width() * 0.5 - 1.0;
-            let inner = outer * 0.62;
-            let painter = ui.painter();
-            // Hue ring: 48 solid-colour quads approximated as triangles.
-            const SEGMENTS: u32 = 48;
-            for k in 0..SEGMENTS {
-                let a0 = (k as f32 / SEGMENTS as f32) * std::f32::consts::TAU;
-                let a1 = ((k + 1) as f32 / SEGMENTS as f32) * std::f32::consts::TAU;
-                let hue = (k as f32 / SEGMENTS as f32) * 360.0;
-                let color = hsv_rgb(hue, 1.0, 1.0);
-                let dir0 = egui::vec2(a0.cos(), a0.sin());
-                let dir1 = egui::vec2(a1.cos(), a1.sin());
-                // Slightly overlap segments to avoid seams.
-                let p0 = center + dir0 * inner;
-                let p1 = center + dir0 * outer;
-                let p2 = center + dir1 * outer;
-                let p3 = center + dir1 * inner;
-                painter.add(egui::Shape::convex_polygon(
-                    vec![p0, p1, p2, p3],
-                    color,
-                    Stroke::NONE,
-                ));
-            }
-            painter.circle_filled(center, inner - 1.0, palette.card);
-            painter.circle_stroke(center, inner, Stroke::new(1.0, palette.border));
-
-            // Handle: angle from hue, radius from saturation.
-            let angle = value.hue.to_radians();
-            let radius = inner + (outer - inner) * (value.saturation.clamp(0.0, 100.0) / 100.0);
-            let handle = center + egui::vec2(angle.cos(), angle.sin()) * radius;
-            painter.circle_filled(handle, 6.0, Color32::WHITE);
-            painter.circle_stroke(handle, 6.0, Stroke::new(1.5, palette.accent));
-
-            if response.dragged() || response.clicked() {
-                if let Some(pointer) = response.interact_pointer_pos() {
-                    let delta = pointer - center;
-                    let dist = delta.length();
-                    if dist > 0.5 {
-                        let hue = delta.y.atan2(delta.x).to_degrees();
-                        value.hue = hue.rem_euclid(360.0);
-                    }
-                    value.saturation =
-                        (((dist - inner) / (outer - inner)) * 100.0).clamp(0.0, 100.0);
-                    changed = true;
-                }
-            }
-        });
-        ui.vertical(|ui| {
-            ui.label(RichText::new(label).size(11.0).color(palette.dim));
-            let tint = hsv_rgb(value.hue, (value.saturation / 100.0).clamp(0.0, 1.0), 1.0);
-            let (chip, _) = ui
-                .allocate_exact_size(Vec2::new(ui.available_width().min(16.0), 6.0), Sense::hover());
-            ui.painter().rect_filled(chip, CornerRadius::same(3), tint);
-            changed |= slider(ui, &mut value.luminance, -100.0..=100.0, 1.0, "Lum", palette);
-        });
+        let wheel_response = ui.allocate_ui_with_layout(
+            Vec2::splat(wheel),
+            Layout::top_down(Align::Center),
+            |ui| wheel_pad(ui, value, palette),
+        );
+        changed |= wheel_response.inner;
+        ui.add_space(gap);
+        let controls = ui.allocate_ui_with_layout(
+            Vec2::new(control_w, wheel),
+            Layout::top_down(Align::LEFT),
+            |ui| {
+                ui.set_width(control_w);
+                ui.label(RichText::new(label).size(11.0).color(palette.dim));
+                let tint = hsv_rgb(value.hue, (value.saturation / 100.0).clamp(0.0, 1.0), 1.0);
+                let (chip, _) = ui.allocate_exact_size(
+                    Vec2::new(control_w.min(80.0), 6.0),
+                    Sense::hover(),
+                );
+                ui.painter().rect_filled(chip, CornerRadius::same(3), tint);
+                ui.spacing_mut().slider_width = 92.0;
+                slider(ui, &mut value.luminance, -100.0..=100.0, 1.0, "Lum", palette)
+            },
+        );
+        changed |= controls.inner;
     });
+    changed
+}
+
+/// Hue/saturation pad. Fixed-size so the surrounding row cannot reflow.
+fn wheel_pad(ui: &mut Ui, value: &mut crate::grade::HslRange, palette: Palette) -> bool {
+    let size = Vec2::splat(palette.metrics.wheel_size);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
+    let center = rect.center();
+    let outer = rect.width() * 0.5 - 1.0;
+    let inner = outer * 0.62;
+    let painter = ui.painter();
+    // Hue ring: 48 solid-colour quads approximated as triangles.
+    const SEGMENTS: u32 = 48;
+    for k in 0..SEGMENTS {
+        let a0 = (k as f32 / SEGMENTS as f32) * std::f32::consts::TAU;
+        let a1 = ((k + 1) as f32 / SEGMENTS as f32) * std::f32::consts::TAU;
+        let hue = (k as f32 / SEGMENTS as f32) * 360.0;
+        let color = hsv_rgb(hue, 1.0, 1.0);
+        let dir0 = egui::vec2(a0.cos(), a0.sin());
+        let dir1 = egui::vec2(a1.cos(), a1.sin());
+        let p0 = center + dir0 * inner;
+        let p1 = center + dir0 * outer;
+        let p2 = center + dir1 * outer;
+        let p3 = center + dir1 * inner;
+        painter.add(egui::Shape::convex_polygon(
+            vec![p0, p1, p2, p3],
+            color,
+            Stroke::NONE,
+        ));
+    }
+    painter.circle_filled(center, inner - 1.0, palette.card);
+    painter.circle_stroke(center, inner, Stroke::new(1.0, palette.border));
+
+    // Handle: angle from hue, radius from saturation.
+    let angle = value.hue.to_radians();
+    let radius = inner + (outer - inner) * (value.saturation.clamp(0.0, 100.0) / 100.0);
+    let handle = center + egui::vec2(angle.cos(), angle.sin()) * radius;
+    painter.circle_filled(handle, 6.0, Color32::WHITE);
+    painter.circle_stroke(handle, 6.0, Stroke::new(1.5, palette.accent));
+
+    let mut changed = false;
+    if response.dragged() || response.clicked() {
+        if let Some(pointer) = response.interact_pointer_pos() {
+            let delta = pointer - center;
+            let dist = delta.length();
+            if dist > 0.5 {
+                let hue = delta.y.atan2(delta.x).to_degrees();
+                value.hue = hue.rem_euclid(360.0);
+            }
+            value.saturation =
+                (((dist - inner) / (outer - inner)) * 100.0).clamp(0.0, 100.0);
+            changed = true;
+        }
+    }
     changed
 }
 
@@ -366,34 +389,6 @@ pub fn small_caps(ui: &mut Ui, text: &str, palette: Palette) {
             .font(FontId::proportional(10.5))
             .color(palette.dim),
     );
-}
-
-/// GNOME header-bar window control: circular hover, destructive hover for close.
-pub fn window_control_button(
-    ui: &mut Ui,
-    icon: Icon,
-    palette: Palette,
-    destructive: bool,
-) -> Response {
-    let m = palette.metrics;
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(m.icon_button), Sense::click());
-    let hovered = response.hovered() || response.is_pointer_button_down_on();
-    if hovered {
-        let fill = if destructive {
-            palette.error
-        } else {
-            palette.card_hover
-        };
-        ui.painter()
-            .circle_filled(rect.center(), rect.width() * 0.5 - 1.0, fill);
-    }
-    let color = if destructive && hovered {
-        palette.on_accent
-    } else {
-        palette.text
-    };
-    paint_icon(ui, icon, rect.shrink(m.space_sm), color);
-    response
 }
 
 /// Ghost icon button (transparent until hovered), shadcn `ghost`/`sm` style.

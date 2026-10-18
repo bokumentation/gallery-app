@@ -10,7 +10,7 @@ use crate::ui::widgets as w;
 use crossbeam_channel::Receiver;
 use egui::{
     Align, Align2, Color32, CornerRadius, FontId, Frame, Id, Layout, Margin, Rect, RichText, Sense,
-    Stroke, StrokeKind, Ui, Vec2,
+    Stroke, StrokeKind, TextureId, Ui, Vec2,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -45,6 +45,9 @@ pub struct GalleryApp {
     pub(crate) pan: Vec2,
     /// Fit scale from the last frame, used by keyboard zooming.
     pub(crate) viewer_fit: f32,
+    /// Last texture actually drawn, kept while a zoom-triggered re-decode is in
+    /// flight so the preview does not flash back to the thumbnail.
+    viewer_display: Option<(PathBuf, TextureId)>,
     scan_generation: u64,
     scan_rx: Option<Receiver<ScanOutcome>>,
     scanning: bool,
@@ -182,6 +185,7 @@ impl GalleryApp {
             zoom: None,
             pan: Vec2::ZERO,
             viewer_fit: 1.0,
+            viewer_display: None,
             scan_generation: 0,
             scan_rx: None,
             scanning: false,
@@ -434,6 +438,7 @@ impl GalleryApp {
     fn reset_zoom(&mut self) {
         self.zoom = None;
         self.pan = Vec2::ZERO;
+        self.viewer_display = None;
     }
 
     /// Path of the image currently shown in the viewer.
@@ -688,27 +693,6 @@ impl GalleryApp {
                     .inner_margin(Margin::symmetric(10, 8)),
             )
             .show(ui, |ui| {
-                // With native decorations disabled this bar is the title bar:
-                // drag empty space to move the window, double-click to toggle
-                // maximize. Buttons added below sit on top of this interaction.
-                let title_rect = ui.max_rect();
-                let title = ui.interact(
-                    title_rect,
-                    Id::unique("title-bar-drag"),
-                    Sense::click_and_drag(),
-                );
-                if title.drag_started() {
-                    ui.ctx()
-                        .send_viewport_cmd(egui::ViewportCommand::StartDrag);
-                }
-                if title.double_clicked() {
-                    let maximized =
-                        ui.ctx()
-                            .input(|input| input.viewport().maximized.unwrap_or(false));
-                    ui.ctx()
-                        .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
-                }
-
                 ui.horizontal_centered(|ui| {
                     if w::icon_button(ui, Icon::Menu, palette)
                         .on_hover_text("Toggle sidebar")
@@ -749,9 +733,6 @@ impl GalleryApp {
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         for spec in crate::ui::actions::RIGHT_ACTIONS.iter().rev() {
-                            if spec.id == ActionId::WindowMinimize {
-                                ui.separator();
-                            }
                             self.render_action(ui, spec, palette);
                         }
                     });
@@ -775,22 +756,12 @@ impl GalleryApp {
             spec.id,
             ActionId::Sliders | ActionId::Info | ActionId::Crop
         );
-        let icon = if spec.id == ActionId::WindowMaximize {
-            let maximized = ui.ctx().input(|input| input.viewport().maximized.unwrap_or(false));
-            Some(if maximized {
-                w::Icon::Restore
-            } else {
-                w::Icon::Maximize
-            })
-        } else {
-            spec.icon
-        };
         let response = match spec.style {
-            ButtonStyle::Primary => match icon {
+            ButtonStyle::Primary => match spec.icon {
                 Some(icon) => w::accent_icon_button(ui, icon, palette),
                 None => w::accent_button(ui, spec.label, palette),
             },
-            ButtonStyle::Ghost => match icon {
+            ButtonStyle::Ghost => match spec.icon {
                 Some(icon) if is_toggle => w::toggle_icon_button(ui, icon, active, palette),
                 Some(icon) => w::icon_button(ui, icon, palette),
                 None => w::flat_button(ui, spec.label, palette),
@@ -802,12 +773,6 @@ impl GalleryApp {
                     spec.label
                 };
                 w::flat_button(ui, label, palette)
-            }
-            ButtonStyle::Window => {
-                w::window_control_button(ui, icon.unwrap_or(w::Icon::Minimize), palette, false)
-            }
-            ButtonStyle::WindowClose => {
-                w::window_control_button(ui, icon.unwrap_or(w::Icon::Close), palette, true)
             }
         };
         let response = response.on_hover_text(spec.label);
@@ -849,16 +814,6 @@ impl GalleryApp {
                 theme::apply(ctx, self.palette);
             }
             ActionId::Refresh => self.rescan(),
-            ActionId::WindowMinimize => {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
-            }
-            ActionId::WindowMaximize => {
-                let maximized = ctx.input(|input| input.viewport().maximized.unwrap_or(false));
-                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
-            }
-            ActionId::WindowClose => {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
         }
     }
 
@@ -1127,19 +1082,33 @@ impl GalleryApp {
             .as_deref()
             .map(display_name)
             .unwrap_or_else(|| "No folder".to_owned());
-        ui.vertical(|ui| {
-            ui.label(
-                RichText::new(title)
-                    .font(theme::bold_font(17.0))
-                    .color(palette.text),
-            );
-            let subtitle = self
-                .current_dir
-                .as_deref()
-                .map(|path| path.display().to_string())
-                .unwrap_or_default();
-            ui.label(RichText::new(subtitle).size(11.5).color(palette.dim));
-        });
+        let subtitle = self
+            .current_dir
+            .as_deref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default();
+        // Bound the title block so a long path cannot squeeze the search box or
+        // the S/M/L cluster; both lines ellipsize instead.
+        ui.allocate_ui_with_layout(
+            Vec2::new(340.0, 36.0),
+            Layout::top_down(Align::LEFT),
+            |ui| {
+                ui.set_max_width(340.0);
+                ui.spacing_mut().item_spacing.y = 0.0;
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(title)
+                            .font(theme::bold_font(17.0))
+                            .color(palette.text),
+                    )
+                    .truncate(),
+                );
+                ui.add(
+                    egui::Label::new(RichText::new(subtitle).size(11.5).color(palette.dim))
+                        .truncate(),
+                );
+            },
+        );
     }
 
     fn header_count(&self, ui: &mut Ui, palette: Palette) {
@@ -1499,6 +1468,16 @@ impl GalleryApp {
             }
         }
 
+        // If the exact target is still decoding (zoom crossed a texture step),
+        // keep drawing the last texture instead of flashing the thumbnail.
+        if let Some(texture) = texture_id {
+            self.viewer_display = Some((item.path.clone(), texture));
+        } else if let Some((path, texture)) = &self.viewer_display {
+            if path == &item.path {
+                texture_id = Some(*texture);
+            }
+        }
+
         if let Some(crate_texture_id) = texture_id {
             let size = drawn * scale;
             // Keep the image from being dragged completely out of view.
@@ -1728,82 +1707,6 @@ impl GalleryApp {
         ctx.request_repaint_after(Duration::from_millis(200));
     }
 
-    /// Invisible edge/corner strips for resizing an undecorated (CSD) window.
-    fn window_resize_handles(&self, ctx: &egui::Context) {
-        let maximized = ctx.input(|input| input.viewport().maximized.unwrap_or(false));
-        if maximized {
-            return;
-        }
-        let screen = ctx.content_rect();
-        const EDGE: f32 = 6.0;
-        type Handle = (Rect, egui::ResizeDirection, egui::CursorIcon);
-        let handles: [Handle; 8] = [
-            (
-                Rect::from_min_max(screen.min, egui::pos2(screen.max.x, screen.min.y + EDGE)),
-                egui::ResizeDirection::North,
-                egui::CursorIcon::ResizeVertical,
-            ),
-            (
-                Rect::from_min_max(egui::pos2(screen.min.x, screen.max.y - EDGE), screen.max),
-                egui::ResizeDirection::South,
-                egui::CursorIcon::ResizeVertical,
-            ),
-            (
-                Rect::from_min_max(screen.min, egui::pos2(screen.min.x + EDGE, screen.max.y)),
-                egui::ResizeDirection::West,
-                egui::CursorIcon::ResizeHorizontal,
-            ),
-            (
-                Rect::from_min_max(egui::pos2(screen.max.x - EDGE, screen.min.y), screen.max),
-                egui::ResizeDirection::East,
-                egui::CursorIcon::ResizeHorizontal,
-            ),
-            (
-                Rect::from_min_size(screen.min, Vec2::splat(EDGE)),
-                egui::ResizeDirection::NorthWest,
-                egui::CursorIcon::ResizeNwSe,
-            ),
-            (
-                Rect::from_min_size(
-                    egui::pos2(screen.max.x - EDGE, screen.min.y),
-                    Vec2::splat(EDGE),
-                ),
-                egui::ResizeDirection::NorthEast,
-                egui::CursorIcon::ResizeNeSw,
-            ),
-            (
-                Rect::from_min_size(
-                    egui::pos2(screen.min.x, screen.max.y - EDGE),
-                    Vec2::splat(EDGE),
-                ),
-                egui::ResizeDirection::SouthWest,
-                egui::CursorIcon::ResizeNeSw,
-            ),
-            (
-                Rect::from_min_size(
-                    egui::pos2(screen.max.x - EDGE, screen.max.y - EDGE),
-                    Vec2::splat(EDGE),
-                ),
-                egui::ResizeDirection::SouthEast,
-                egui::CursorIcon::ResizeNwSe,
-            ),
-        ];
-        for (index, (rect, direction, cursor)) in handles.into_iter().enumerate() {
-            egui::Area::new(Id::unique(("window-resize", index)))
-                .order(egui::Order::Foreground)
-                .fixed_pos(rect.min)
-                .show(ctx, |ui| {
-                    let (_, response) = ui.allocate_exact_size(rect.size(), Sense::drag());
-                    if response.hovered() {
-                        ui.ctx().set_cursor_icon(cursor);
-                    }
-                    if response.drag_started() {
-                        ui.ctx()
-                            .send_viewport_cmd(egui::ViewportCommand::BeginResize(direction));
-                    }
-                });
-        }
-    }
 }
 
 impl eframe::App for GalleryApp {
@@ -1828,7 +1731,6 @@ impl eframe::App for GalleryApp {
         self.central(ui);
         self.sync_filters();
         self.toast(&ctx);
-        self.window_resize_handles(&ctx);
 
         if self.scanning
             || self.viewer.loading
