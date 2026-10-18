@@ -1,6 +1,6 @@
 use crate::nvjpeg::{is_jpeg, NvJpegDecoder};
 use crate::thumbs::decode_image;
-use crate::zerocopy::{ZeroCopyAllocation, ZeroCopyConverter};
+use crate::zerocopy::{Downsampler, ZeroCopyAllocation, ZeroCopyConverter};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use egui::TextureId;
 use egui_wgpu::RenderState;
@@ -363,6 +363,7 @@ fn spawn_worker(
                 let started = Instant::now();
                 let result = decode_and_upload(&mut worker, &request.key, &device, &queue);
                 let total = started.elapsed();
+                let result = result.map(|decoded| fit_to_display(&worker, decoded, &request.key));
                 match result {
                     Ok(decoded) => {
                         let _ = result_tx.send(LoadResult {
@@ -398,10 +399,12 @@ struct DecodeWorker {
     nvjpeg: Option<NvJpegDecoder>,
     nvjpeg_ready: bool,
     zero_copy: Option<ZeroCopyConverter>,
+    downsampler: Downsampler,
 }
 
 impl DecodeWorker {
     fn new(device: Device, queue: Queue) -> Self {
+        let downsampler = Downsampler::new(device.clone(), queue.clone());
         let zero_copy = if zero_copy_enabled() {
             match ZeroCopyConverter::new(device, queue) {
                 Ok(converter) => {
@@ -420,6 +423,7 @@ impl DecodeWorker {
             nvjpeg: None,
             nvjpeg_ready: false,
             zero_copy,
+            downsampler,
         };
         worker.ensure_nvjpeg();
         worker
@@ -610,6 +614,39 @@ fn decode_and_upload(
         upload,
         zero_copy: None,
     })
+}
+
+/// Downscales a freshly decoded full-resolution texture to the display size
+/// the stage needs, so a 24 MP JPEG does not keep a 92 MB texture alive in the
+/// viewer cache. Runs on the decode worker right before the result is sent.
+fn fit_to_display(
+    worker: &DecodeWorker,
+    mut decoded: DecodedImage,
+    key: &CacheKey,
+) -> DecodedImage {
+    let fit = [key.width.max(1), key.height.max(1)];
+    match worker
+        .downsampler
+        .run(&decoded.view, [decoded.width, decoded.height], fit)
+    {
+        Ok((texture, view, [width, height])) => {
+            log::info!(
+                "downsample {}x{} fitted to {}x{} ({} px over {} px)",
+                decoded.width,
+                decoded.height,
+                width,
+                height,
+                decoded.width * decoded.height,
+                width * height
+            );
+            decoded.texture = texture;
+            decoded.view = view;
+            decoded.width = width;
+            decoded.height = height;
+            decoded
+        }
+        Err(_) => decoded,
+    }
 }
 
 fn zero_copy_enabled() -> bool {
