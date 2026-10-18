@@ -1164,9 +1164,22 @@ impl GalleryApp {
     }
 
     fn header_recursive(&mut self, ui: &mut Ui, palette: Palette) {
-        ui.label(RichText::new("Recursive").size(12.0).color(palette.dim));
+        // Keep the label/switch pair in a fixed cell: in the right-to-left
+        // header the pair is otherwise laid out backwards, and the fixed width
+        // stops the cell from resizing when the switch animates.
         let mut recursive = self.recursive;
-        if w::switch(ui, &mut recursive, palette).changed() {
+        let changed = ui
+            .allocate_ui_with_layout(
+                Vec2::new(124.0, palette.metrics.control_h_md),
+                Layout::left_to_right(Align::Center),
+                |ui| {
+                    ui.label(RichText::new("Recursive").size(12.0).color(palette.dim));
+                    ui.add_space(4.0);
+                    w::switch(ui, &mut recursive, palette).changed()
+                },
+            )
+            .inner;
+        if changed {
             self.recursive = recursive;
             self.rescan();
         }

@@ -16,8 +16,12 @@ pub fn show(app: &mut GalleryApp, ui: &mut Ui) {
     let palette = app.palette;
     let metrics = palette.metrics;
     egui::Panel::right("right_panel")
-        .resizable(false)
-        .exact_size(metrics.panel_w)
+        // Same recipe as the left sidebar: a persisted, user-resizable width
+        // with a safe range, so a narrow window or a long LUT name can never
+        // squeeze the slider rows.
+        .resizable(true)
+        .default_size(metrics.panel_w)
+        .size_range(260.0..=420.0)
         .frame(
             Frame::new()
                 .fill(palette.sidebar)

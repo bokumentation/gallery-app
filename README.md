@@ -32,6 +32,9 @@ Edit (right-side adjust panel, RapidRAW-style layout):
 - Lightroom-style slider rows: a fixed label column, a flexible track and a
   fixed-width value column (the widget's own value text is hidden), so negative
   or large values can never resize the right panel
+- The right adjust panel is user-resizable (same persisted-width behavior as the
+  folder sidebar), with an always-reserved scrollbar so opening a section never
+  shifts the controls
 - Zoom and pan: wheel zooms at the cursor, drag pans, double-click toggles
   Fit ↔ 100%, with a floating bottom-right control (zoom out / percentage /
   zoom in / fit); keys `+` `-` `0` `1`

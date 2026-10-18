@@ -162,13 +162,15 @@ pub fn color_wheel(
     let control_w = (ui.available_width() - wheel - gap).max(130.0);
     let mut changed = false;
     ui.horizontal(|ui| {
+        // The layout already inserts `item_spacing` between the two cells;
+        // adding an explicit gap would make the row wider than the panel.
+        ui.spacing_mut().item_spacing.x = gap;
         let wheel_response = ui.allocate_ui_with_layout(
             Vec2::splat(wheel),
             Layout::top_down(Align::Center),
             |ui| wheel_pad(ui, value, palette),
         );
         changed |= wheel_response.inner;
-        ui.add_space(gap);
         let controls = ui.allocate_ui_with_layout(
             Vec2::new(control_w, wheel),
             Layout::top_down(Align::LEFT),
@@ -410,7 +412,11 @@ pub fn search_field(ui: &mut Ui, text: &mut String, width: f32, palette: Palette
         egui::pos2(icon_rect.right() + 8.0, rect.top()),
         egui::pos2(rect.right() - clear_space, rect.bottom()),
     );
-    let response = ui.put(
+    // `place` (not `put`) adds the edit box without moving the layout cursor.
+    // `put` advances the cursor after the inner text rect, which in a
+    // right-to-left toolbar lands *inside* the painted search box and makes the
+    // next widget (the grid-size dropdown) overlap it.
+    let response = ui.place(
         text_rect,
         TextEdit::singleline(text)
             .id(Id::unique(SEARCH_ID))
@@ -515,7 +521,9 @@ fn ghost_icon_button(ui: &mut Ui, icon: Icon, palette: Palette, color: Color32) 
 
 #[cfg(test)]
 mod tests {
-    use super::format_slider_value;
+    use super::{color_wheel, format_slider_value, search_field, slider};
+    use crate::ui::tokens::Palette;
+    use egui::Layout;
 
     #[test]
     fn slider_values_have_a_stable_column() {
@@ -525,5 +533,49 @@ mod tests {
         assert_eq!(format_slider_value(-2.5, 0.5), "-2.5");
         assert_eq!(format_slider_value(5.0, 1.0), "+5");
         assert_eq!(format_slider_value(-100.0, 1.0), "-100");
+    }
+
+    #[test]
+    fn slider_row_fits_the_panel_width() {
+        let palette = Palette::dark();
+        egui::__run_test_ui(|ui| {
+            ui.set_width(254.0);
+            let mut value = 0.0;
+            slider(ui, &mut value, -5.0..=5.0, 0.01, "Exposure", palette);
+            let width = ui.min_rect().width();
+            assert!(width <= 254.5, "slider row is {width} wide, panel is 254");
+        });
+    }
+
+    #[test]
+    fn color_wheel_row_fits_the_panel_width() {
+        let palette = Palette::dark();
+        egui::__run_test_ui(|ui| {
+            ui.set_width(254.0);
+            let mut wheel = crate::grade::HslRange::default();
+            color_wheel(ui, &mut wheel, "Shadows", palette);
+            let width = ui.min_rect().width();
+            assert!(width <= 254.5, "wheel row is {width} wide, panel is 254");
+        });
+    }
+
+    #[test]
+    fn search_field_advances_only_its_box() {
+        let palette = Palette::dark();
+        egui::__run_test_ui(|ui| {
+            ui.set_width(600.0);
+            let mut search = String::new();
+            ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                let right = ui.available_rect_before_wrap().right();
+                let spacing = ui.spacing().item_spacing.x;
+                search_field(ui, &mut search, 220.0, palette);
+                let next = ui.next_widget_position().x;
+                let expected = right - 220.0 - spacing;
+                assert!(
+                    (next - expected).abs() < 1.0,
+                    "next widget starts at {next}, expected {expected} (box left)"
+                );
+            });
+        });
     }
 }
