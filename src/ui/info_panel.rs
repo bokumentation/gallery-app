@@ -4,7 +4,6 @@
 use crate::app::GalleryApp;
 use crate::theme;
 use crate::thumbs::human_size;
-use crate::ui::widgets as w;
 use egui::{Align, Frame, Layout, Margin, RichText, Ui};
 use std::path::Path;
 use std::time::SystemTime;
@@ -51,12 +50,6 @@ pub fn panel_content(app: &mut GalleryApp, ui: &mut Ui) {
                 .wrap(),
             );
         });
-    ui.add_space(6.0);
-    if w::flat_button(ui, "Copy path", palette).clicked() {
-        ui.ctx().copy_text(item.path.display().to_string());
-        app.show_toast("Path copied".to_owned(), false);
-    }
-
     ui.add_space(10.0);
     ui.separator();
     ui.add_space(6.0);
@@ -104,7 +97,8 @@ pub fn panel_content(app: &mut GalleryApp, ui: &mut Ui) {
         palette,
     );
     row(ui, "Format", file_format(&path), palette);
-    row(ui, "Modified", modified_label(item.modified), palette);
+    row(ui, "Created", format_timestamp(item.created), palette);
+    row(ui, "Modified", format_timestamp(item.modified), palette);
 
     ui.add_space(10.0);
     ui.separator();
@@ -166,21 +160,62 @@ fn file_format(path: &Path) -> String {
         .unwrap_or_else(|| "Unknown".to_owned())
 }
 
-fn modified_label(modified: Option<SystemTime>) -> String {
-    let Some(modified) = modified else {
-        return "Unknown".to_owned();
+/// Format a filesystem timestamp as `YYYY-MM-DD HH:MM UTC`. The standard
+/// library exposes no calendar formatting, and pulling in a date crate for this
+/// one row is not worth it; the result is UTC-labelled so it is unambiguous.
+fn format_timestamp(time: Option<SystemTime>) -> String {
+    let Some(time) = time else {
+        return "—".to_owned();
     };
-    let Ok(age) = SystemTime::now().duration_since(modified) else {
-        return "Just now".to_owned();
+    let Ok(since_epoch) = time.duration_since(std::time::UNIX_EPOCH) else {
+        return "—".to_owned();
     };
-    let secs = age.as_secs();
-    if secs < 60 {
-        format!("{secs}s ago")
-    } else if secs < 3_600 {
-        format!("{}m ago", secs / 60)
-    } else if secs < 86_400 {
-        format!("{}h ago", secs / 3_600)
-    } else {
-        format!("{}d ago", secs / 86_400)
+    let secs = since_epoch.as_secs();
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    let (year, month, day) = civil_from_days(days);
+    format!(
+        "{year:04}-{month:02}-{day:02} {:02}:{:02} UTC",
+        rem / 3_600,
+        (rem % 3_600) / 60
+    )
+}
+
+/// Howard Hinnant's `civil_from_days`: days since 1970-01-01 to a calendar date.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u32; // [0, 146096]
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    (y + i64::from(m <= 2), m, d)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn unix_epoch_formats() {
+        assert_eq!(
+            format_timestamp(Some(std::time::UNIX_EPOCH)),
+            "1970-01-01 00:00 UTC"
+        );
+    }
+
+    #[test]
+    fn known_timestamp_formats() {
+        let time = std::time::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        assert_eq!(format_timestamp(Some(time)), "2023-11-14 22:13 UTC");
+    }
+
+    #[test]
+    fn missing_timestamp_is_a_dash() {
+        assert_eq!(format_timestamp(None), "—");
     }
 }

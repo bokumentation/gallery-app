@@ -293,7 +293,8 @@ pub fn slider(
 
 pub fn search_field(ui: &mut Ui, text: &mut String, width: f32, palette: Palette) -> bool {
     let m = palette.metrics;
-    let total = Vec2::new(width + 68.0, m.control_h_md);
+    // `width` is the outer box width; the icon and clear affordance live inside.
+    let total = Vec2::new(width.max(140.0), m.control_h_md);
     let (rect, _) = ui.allocate_exact_size(total, Sense::hover());
     let painter = ui.painter();
     painter.rect_filled(rect, CornerRadius::same(m.radius_md), palette.card);
@@ -304,16 +305,19 @@ pub fn search_field(ui: &mut Ui, text: &mut String, width: f32, palette: Palette
         StrokeKind::Inside,
     );
 
+    let icon_size = 15.0;
     let icon_rect = Rect::from_min_size(
-        rect.min + Vec2::new(11.0, (rect.height() - 15.0) * 0.5),
-        Vec2::splat(15.0),
+        egui::pos2(rect.left() + 11.0, rect.center().y - icon_size * 0.5),
+        Vec2::splat(icon_size),
     );
     paint_search_icon(ui, icon_rect, palette.dim);
 
     let mut changed = false;
+    // Leave room for the clear button only while it is visible.
+    let clear_space = if text.is_empty() { 14.0 } else { 30.0 };
     let text_rect = Rect::from_min_max(
-        egui::pos2(icon_rect.right() + 8.0, rect.top() + 4.0),
-        egui::pos2(rect.right() - 14.0, rect.bottom() - 4.0),
+        egui::pos2(icon_rect.right() + 8.0, rect.top()),
+        egui::pos2(rect.right() - clear_space, rect.bottom()),
     );
     let response = ui.put(
         text_rect,
@@ -322,7 +326,8 @@ pub fn search_field(ui: &mut Ui, text: &mut String, width: f32, palette: Palette
             .frame(Frame::NONE)
             .hint_text(RichText::new("Search images").color(palette.dim))
             .desired_width(text_rect.width())
-            .margin(egui::vec2(0.0, 3.0)),
+            .margin(Margin::ZERO)
+            .align(egui::Align2::LEFT_CENTER),
     );
     changed |= response.changed();
 
@@ -361,6 +366,34 @@ pub fn small_caps(ui: &mut Ui, text: &str, palette: Palette) {
             .font(FontId::proportional(10.5))
             .color(palette.dim),
     );
+}
+
+/// GNOME header-bar window control: circular hover, destructive hover for close.
+pub fn window_control_button(
+    ui: &mut Ui,
+    icon: Icon,
+    palette: Palette,
+    destructive: bool,
+) -> Response {
+    let m = palette.metrics;
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(m.icon_button), Sense::click());
+    let hovered = response.hovered() || response.is_pointer_button_down_on();
+    if hovered {
+        let fill = if destructive {
+            palette.error
+        } else {
+            palette.card_hover
+        };
+        ui.painter()
+            .circle_filled(rect.center(), rect.width() * 0.5 - 1.0, fill);
+    }
+    let color = if destructive && hovered {
+        palette.on_accent
+    } else {
+        palette.text
+    };
+    paint_icon(ui, icon, rect.shrink(m.space_sm), color);
+    response
 }
 
 /// Ghost icon button (transparent until hovered), shadcn `ghost`/`sm` style.

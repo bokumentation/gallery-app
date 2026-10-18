@@ -28,6 +28,9 @@ pub enum Icon {
     ZoomIn,
     ZoomOut,
     Maximize,
+    Restore,
+    Minimize,
+    Close,
     Image,
     Search,
 }
@@ -261,6 +264,22 @@ const MAXIMIZE: &[StrokeDef] = &[
     StrokeDef::Poly(&[[16.0, 21.0], [19.0, 21.0], [21.0, 19.0], [21.0, 16.0]]),
 ];
 
+const RESTORE: &[StrokeDef] = &[
+    StrokeDef::Rect {
+        xy: [8.0, 8.0],
+        wh: [12.0, 12.0],
+        rx: 2.0,
+    },
+    StrokeDef::Poly(&[[4.0, 16.0], [4.0, 5.0], [5.0, 4.0], [16.0, 4.0]]),
+];
+
+const MINIMIZE: &[StrokeDef] = &[StrokeDef::Line([5.0, 12.0], [19.0, 12.0])];
+
+const CLOSE: &[StrokeDef] = &[
+    StrokeDef::Line([6.0, 6.0], [18.0, 18.0]),
+    StrokeDef::Line([18.0, 6.0], [6.0, 18.0]),
+];
+
 const IMAGE: &[StrokeDef] = &[
     StrokeDef::Rect {
         xy: [3.0, 3.0],
@@ -304,6 +323,9 @@ pub fn icon_def(icon: Icon) -> &'static [StrokeDef] {
         Icon::ZoomIn => ZOOM_IN,
         Icon::ZoomOut => ZOOM_OUT,
         Icon::Maximize => MAXIMIZE,
+        Icon::Restore => RESTORE,
+        Icon::Minimize => MINIMIZE,
+        Icon::Close => CLOSE,
         Icon::Image => IMAGE,
         Icon::Search => SEARCH,
     }

@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 const TOP_BAR_HEIGHT: f32 = 52.0;
+const MAX_ZOOM: f32 = 8.0;
 
 pub struct GalleryApp {
     pub(crate) theme_mode: ThemeMode,
@@ -39,6 +40,11 @@ pub struct GalleryApp {
     scroll_to_selection: bool,
     viewer_open: bool,
     viewer_index: usize,
+    /// `None` = fit to window; `Some(scale)` = absolute image-pixel-to-point scale.
+    pub(crate) zoom: Option<f32>,
+    pub(crate) pan: Vec2,
+    /// Fit scale from the last frame, used by keyboard zooming.
+    pub(crate) viewer_fit: f32,
     scan_generation: u64,
     scan_rx: Option<Receiver<ScanOutcome>>,
     scanning: bool,
@@ -173,6 +179,9 @@ impl GalleryApp {
             scroll_to_selection: false,
             viewer_open: false,
             viewer_index: 0,
+            zoom: None,
+            pan: Vec2::ZERO,
+            viewer_fit: 1.0,
             scan_generation: 0,
             scan_rx: None,
             scanning: false,
@@ -412,12 +421,19 @@ impl GalleryApp {
         self.selection = Some(index);
         self.viewer_index = index;
         self.viewer_open = true;
+        self.reset_zoom();
     }
 
     fn close_viewer(&mut self) {
         self.viewer_open = false;
         self.viewer.deactivate();
         self.grade.release();
+        self.reset_zoom();
+    }
+
+    fn reset_zoom(&mut self) {
+        self.zoom = None;
+        self.pan = Vec2::ZERO;
     }
 
     /// Path of the image currently shown in the viewer.
@@ -443,6 +459,7 @@ impl GalleryApp {
         let len = self.visible.len() as isize;
         self.viewer_index = (self.viewer_index as isize + delta).rem_euclid(len) as usize;
         self.selection = Some(self.viewer_index);
+        self.reset_zoom();
     }
 
     fn move_selection(&mut self, delta: isize) {
@@ -507,6 +524,36 @@ impl GalleryApp {
         if self.viewer_open {
             if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::E)) {
                 self.toggle_edit_panel();
+            }
+            let zoom_in = ctx.input_mut(|i| {
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Plus)
+                    || i.consume_key(egui::Modifiers::NONE, egui::Key::Equals)
+            });
+            let zoom_out = ctx
+                .input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Minus));
+            let fit = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Num0));
+            let actual =
+                ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Num1));
+            if zoom_in {
+                let base = self.zoom.unwrap_or(self.viewer_fit);
+                self.zoom = Some((base * 1.25).min(MAX_ZOOM));
+            }
+            if zoom_out {
+                let base = self.zoom.unwrap_or(self.viewer_fit);
+                let next = (base / 1.25).max(self.viewer_fit);
+                self.zoom = if (next - self.viewer_fit).abs() < 0.001 {
+                    None
+                } else {
+                    Some(next)
+                };
+            }
+            if fit {
+                self.zoom = None;
+                self.pan = Vec2::ZERO;
+            }
+            if actual {
+                self.zoom = Some(1.0);
+                self.pan = Vec2::ZERO;
             }
             let left = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft));
             let right = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight));
@@ -641,6 +688,27 @@ impl GalleryApp {
                     .inner_margin(Margin::symmetric(10, 8)),
             )
             .show(ui, |ui| {
+                // With native decorations disabled this bar is the title bar:
+                // drag empty space to move the window, double-click to toggle
+                // maximize. Buttons added below sit on top of this interaction.
+                let title_rect = ui.max_rect();
+                let title = ui.interact(
+                    title_rect,
+                    Id::unique("title-bar-drag"),
+                    Sense::click_and_drag(),
+                );
+                if title.drag_started() {
+                    ui.ctx()
+                        .send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                }
+                if title.double_clicked() {
+                    let maximized =
+                        ui.ctx()
+                            .input(|input| input.viewport().maximized.unwrap_or(false));
+                    ui.ctx()
+                        .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+                }
+
                 ui.horizontal_centered(|ui| {
                     if w::icon_button(ui, Icon::Menu, palette)
                         .on_hover_text("Toggle sidebar")
@@ -681,6 +749,9 @@ impl GalleryApp {
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         for spec in crate::ui::actions::RIGHT_ACTIONS.iter().rev() {
+                            if spec.id == ActionId::WindowMinimize {
+                                ui.separator();
+                            }
                             self.render_action(ui, spec, palette);
                         }
                     });
@@ -704,12 +775,22 @@ impl GalleryApp {
             spec.id,
             ActionId::Sliders | ActionId::Info | ActionId::Crop
         );
+        let icon = if spec.id == ActionId::WindowMaximize {
+            let maximized = ui.ctx().input(|input| input.viewport().maximized.unwrap_or(false));
+            Some(if maximized {
+                w::Icon::Restore
+            } else {
+                w::Icon::Maximize
+            })
+        } else {
+            spec.icon
+        };
         let response = match spec.style {
-            ButtonStyle::Primary => match spec.icon {
+            ButtonStyle::Primary => match icon {
                 Some(icon) => w::accent_icon_button(ui, icon, palette),
                 None => w::accent_button(ui, spec.label, palette),
             },
-            ButtonStyle::Ghost => match spec.icon {
+            ButtonStyle::Ghost => match icon {
                 Some(icon) if is_toggle => w::toggle_icon_button(ui, icon, active, palette),
                 Some(icon) => w::icon_button(ui, icon, palette),
                 None => w::flat_button(ui, spec.label, palette),
@@ -721,6 +802,12 @@ impl GalleryApp {
                     spec.label
                 };
                 w::flat_button(ui, label, palette)
+            }
+            ButtonStyle::Window => {
+                w::window_control_button(ui, icon.unwrap_or(w::Icon::Minimize), palette, false)
+            }
+            ButtonStyle::WindowClose => {
+                w::window_control_button(ui, icon.unwrap_or(w::Icon::Close), palette, true)
             }
         };
         let response = response.on_hover_text(spec.label);
@@ -762,6 +849,16 @@ impl GalleryApp {
                 theme::apply(ctx, self.palette);
             }
             ActionId::Refresh => self.rescan(),
+            ActionId::WindowMinimize => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            }
+            ActionId::WindowMaximize => {
+                let maximized = ctx.input(|input| input.viewport().maximized.unwrap_or(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+            }
+            ActionId::WindowClose => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
         }
     }
 
@@ -973,7 +1070,9 @@ impl GalleryApp {
 
     fn content_header(&mut self, ui: &mut Ui) {
         let palette = self.palette;
-        let compact = ui.available_width() < 820.0;
+        // The one-row header needs room for the title plus the search box,
+        // S/M/L, Recursive, Sort and the count. Below this it overlaps.
+        let compact = ui.available_width() < 1000.0;
 
         if compact {
             ui.horizontal(|ui| {
@@ -984,7 +1083,7 @@ impl GalleryApp {
             });
             ui.add_space(8.0);
 
-            let search_width = (ui.available_width() - 86.0).clamp(120.0, 320.0);
+            let search_width = ui.available_width().clamp(160.0, 420.0);
             if w::search_field(ui, &mut self.search, search_width, palette) {
                 self.sync_filters();
             }
@@ -1002,7 +1101,7 @@ impl GalleryApp {
                 self.header_title(ui, palette);
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if w::search_field(ui, &mut self.search, 170.0, palette) {
+                    if w::search_field(ui, &mut self.search, 220.0, palette) {
                         self.sync_filters();
                     }
 
@@ -1080,39 +1179,27 @@ impl GalleryApp {
 
     fn header_size(&mut self, ui: &mut Ui, palette: Palette) {
         let mut thumb_size = self.thumb_size;
-        ui.allocate_ui_with_layout(
-            Vec2::new(104.0, 30.0),
-            Layout::left_to_right(Align::Center),
-            |ui| {
-                if w::segmented(
-                    ui,
-                    &[
-                        (ThumbSize::Small, "S"),
-                        (ThumbSize::Medium, "M"),
-                        (ThumbSize::Large, "L"),
-                    ],
-                    &mut thumb_size,
-                    palette,
-                ) {
-                    self.thumb_size = thumb_size;
-                }
-            },
-        );
+        if w::segmented(
+            ui,
+            &[
+                (ThumbSize::Small, "S"),
+                (ThumbSize::Medium, "M"),
+                (ThumbSize::Large, "L"),
+            ],
+            &mut thumb_size,
+            palette,
+        ) {
+            self.thumb_size = thumb_size;
+        }
     }
 
     fn header_recursive(&mut self, ui: &mut Ui, palette: Palette) {
-        ui.allocate_ui_with_layout(
-            Vec2::new(114.0, 30.0),
-            Layout::left_to_right(Align::Center),
-            |ui| {
-                ui.label(RichText::new("Recursive").size(12.0).color(palette.dim));
-                let mut recursive = self.recursive;
-                if w::switch(ui, &mut recursive, palette).changed() {
-                    self.recursive = recursive;
-                    self.rescan();
-                }
-            },
-        );
+        ui.label(RichText::new("Recursive").size(12.0).color(palette.dim));
+        let mut recursive = self.recursive;
+        if w::switch(ui, &mut recursive, palette).changed() {
+            self.recursive = recursive;
+            self.rescan();
+        }
     }
 
     fn grid_ui(&mut self, ui: &mut Ui) {
@@ -1324,7 +1411,53 @@ impl GalleryApp {
             });
 
         let stage = ui.available_rect_before_wrap();
-        let target = viewer_target(stage, ui.ctx().pixels_per_point());
+        let available = stage.shrink(26.0);
+
+        let dimensions = self
+            .viewer
+            .source_dimensions(&item.path)
+            .or_else(|| self.thumbs.get(&item.path).map(|thumb| thumb.size));
+        let thumbnail = self
+            .thumbs
+            .get(&item.path)
+            .map(|thumb| (thumb.texture.id(), thumb.size));
+        if thumbnail.is_none() {
+            self.thumbs.request(&item.path);
+        }
+
+        // Effective edit: selecting the crop frame previews the full oriented
+        // frame without crop or straighten so the overlay stays anchored.
+        let state = self.edits.get(&item.path).cloned().unwrap_or_default();
+        let preview = if self.crop_active {
+            let mut preview = state.clone();
+            preview.crop = None;
+            preview.rotation = 0.0;
+            preview
+        } else {
+            state
+        };
+
+        let display = dimensions.map(|source| preview.display_size(source));
+        let drawn = display
+            .map(|size| Vec2::new(size[0].max(1) as f32, size[1].max(1) as f32))
+            .unwrap_or(Vec2::ONE);
+        let fit = (available.width() / drawn.x)
+            .min(available.height() / drawn.y)
+            .min(1.0);
+        self.viewer_fit = fit;
+        let mut scale = self.zoom.unwrap_or(fit).clamp(fit, MAX_ZOOM);
+        if self.crop_active {
+            scale = fit;
+            self.zoom = None;
+            self.pan = Vec2::ZERO;
+        }
+        // Ask for a higher-resolution decode only in coarse zoom steps, so
+        // wheel zooming does not thrash the loader.
+        let target = viewer_target(
+            stage,
+            ui.ctx().pixels_per_point(),
+            (scale / fit).max(1.0),
+        );
         self.viewer.set_target(&item.path, target);
 
         let next_index = (self.viewer_index + 1) % self.visible.len();
@@ -1341,76 +1474,52 @@ impl GalleryApp {
             },
         );
 
-        let available = stage.shrink(26.0);
         let full_texture = self.viewer.texture_id(&item.path, target);
-        let dimensions = self
-            .viewer
-            .source_dimensions(&item.path)
-            .or_else(|| self.thumbs.get(&item.path).map(|thumb| thumb.size));
-        let thumbnail = self
-            .thumbs
-            .get(&item.path)
-            .map(|thumb| (thumb.texture.id(), thumb.size));
-        if thumbnail.is_none() {
-            self.thumbs.request(&item.path);
-        }
-
         // Route through the grade pass whenever the image has edits, whether or
         // not the panel is open, so adjustments stay visible after closing it.
         let mut texture_id = full_texture;
-        let mut drawn_size = dimensions.map(|d| Vec2::new(d[0] as f32, d[1] as f32));
-        if full_texture.is_some() && dimensions.is_some() {
-            let base = self.viewer.base_texture(&item.path, target);
-            if let Some((base_id, base_view, base_size)) = base {
-                let source = dimensions.unwrap();
-                let state = self.edits.get(&item.path).cloned().unwrap_or_default();
-                // While the crop frame is active the preview shows the full
-                // oriented frame without crop or straighten so the overlay
-                // and its drags stay anchored to a stable image.
-                let preview = if self.crop_active {
-                    let mut preview = state.clone();
-                    preview.crop = None;
-                    preview.rotation = 0.0;
-                    preview
-                } else {
-                    state
-                };
-                if !preview.is_identity() {
-                    let graded = self.grade.ensure(
-                        &item.path,
-                        &base_view,
-                        base_id,
-                        base_size,
-                        source,
-                        &preview,
-                    );
-                    if let Some(graded) = graded {
-                        texture_id = Some(graded);
-                        let display = preview.display_size(source);
-                        drawn_size = Some(Vec2::new(display[0] as f32, display[1] as f32));
+        if full_texture.is_some() {
+            if let Some((base_id, base_view, base_size)) =
+                self.viewer.base_texture(&item.path, target)
+            {
+                if let Some(source) = dimensions {
+                    if !preview.is_identity() {
+                        if let Some(graded) = self.grade.ensure(
+                            &item.path,
+                            &base_view,
+                            base_id,
+                            base_size,
+                            source,
+                            &preview,
+                        ) {
+                            texture_id = Some(graded);
+                        }
                     }
                 }
             }
         }
 
         if let Some(crate_texture_id) = texture_id {
-            if let Some(texture_size) = drawn_size {
-                let scale = (available.width() / texture_size.x)
-                    .min(available.height() / texture_size.y)
-                    .min(1.0);
-                let size = texture_size * scale.max(0.01);
-                let rect = Rect::from_center_size(available.center(), size);
-                if scale < 1.0 {
-                    ui.painter()
-                        .rect_filled(rect.expand(2.0), CornerRadius::same(4), palette.shadow);
+            let size = drawn * scale;
+            // Keep the image from being dragged completely out of view.
+            let max_x = ((size.x - available.width()) * 0.5).max(0.0);
+            let max_y = ((size.y - available.height()) * 0.5).max(0.0);
+            self.pan.x = self.pan.x.clamp(-max_x, max_x);
+            self.pan.y = self.pan.y.clamp(-max_y, max_y);
+            let rect = Rect::from_center_size(available.center() + self.pan, size);
+            if size.x < available.width() - 1.0 || size.y < available.height() - 1.0 {
+                ui.painter()
+                    .rect_filled(rect.expand(2.0), CornerRadius::same(4), palette.shadow);
+            }
+            draw_texture(ui, crate_texture_id, rect, Color32::WHITE);
+            if self.edit_panel_open && self.right_tab == RightTab::Edit && self.crop_active {
+                if let Some(source) = dimensions {
+                    let source = [source[0] as f32, source[1] as f32];
+                    crate::ui::edit_panel::crop_overlay(self, ui, rect, source);
                 }
-                draw_texture(ui, crate_texture_id, rect, Color32::WHITE);
-                if self.edit_panel_open && self.right_tab == RightTab::Edit && self.crop_active {
-                    if let Some(dimensions) = dimensions {
-                        let source = [dimensions[0] as f32, dimensions[1] as f32];
-                        crate::ui::edit_panel::crop_overlay(self, ui, rect, source);
-                    }
-                }
+            } else {
+                self.viewer_canvas_input(ui, available, fit, scale);
+                self.zoom_pill(ui, available, palette, fit, scale);
             }
         } else if let Some(error) = &self.viewer.error {
             ui.allocate_ui_with_layout(
@@ -1449,6 +1558,106 @@ impl GalleryApp {
                 egui::Spinner::new().size(20.0),
             );
         }
+    }
+
+    /// Wheel zoom at the cursor, drag pan, and double-click Fit/100%. Only
+    /// active when the crop overlay is not owning the pointer.
+    fn viewer_canvas_input(&mut self, ui: &mut Ui, available: Rect, fit: f32, scale: f32) {
+        let response = ui.interact(available, Id::unique("viewer-canvas"), Sense::click_and_drag());
+        if response.double_clicked() {
+            if self.zoom.is_none() {
+                self.zoom = Some(1.0f32.max(fit));
+            } else {
+                self.zoom = None;
+            }
+            self.pan = Vec2::ZERO;
+        }
+
+        let can_pan = scale > fit + 0.001;
+        if can_pan && (response.hovered() || response.dragged()) {
+            ui.ctx().set_cursor_icon(if response.dragged() {
+                egui::CursorIcon::Grabbing
+            } else {
+                egui::CursorIcon::Grab
+            });
+        }
+        if can_pan && response.dragged() {
+            self.pan += response.drag_delta();
+        }
+
+        if response.hovered() {
+            let scroll = ui.input(|input| input.smooth_scroll_delta.y);
+            if scroll.abs() > 0.01 {
+                let pointer = ui
+                    .input(|input| input.pointer.hover_pos())
+                    .unwrap_or(available.center());
+                let factor = (scroll * 0.002).exp();
+                let next = (scale * factor).clamp(fit, MAX_ZOOM);
+                if (next - scale).abs() > 0.001 {
+                    // Keep the image point under the pointer fixed.
+                    let cursor = pointer - available.center();
+                    self.pan = cursor - (cursor - self.pan) * (next / scale);
+                    self.zoom = if (next - fit).abs() < 0.001 {
+                        None
+                    } else {
+                        Some(next)
+                    };
+                }
+            }
+        }
+    }
+
+    /// Floating zoom controls in the bottom-right of the preview box.
+    fn zoom_pill(&mut self, ui: &mut Ui, available: Rect, palette: Palette, fit: f32, scale: f32) {
+        let width = 172.0;
+        let height = 44.0;
+        let origin = egui::pos2(
+            available.right() - 16.0 - width,
+            available.bottom() - 16.0 - height,
+        );
+        egui::Area::new(Id::unique("viewer-zoom-controls"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(origin)
+            .show(ui.ctx(), |ui| {
+                Frame::new()
+                    .fill(palette.card)
+                    .stroke(Stroke::new(1.0, palette.input))
+                    .corner_radius(CornerRadius::same(palette.metrics.radius_lg))
+                    .inner_margin(Margin::same(3))
+                    .show(ui, |ui| {
+                        ui.horizontal_centered(|ui| {
+                            if w::icon_button(ui, w::Icon::ZoomOut, palette)
+                                .on_hover_text("Zoom out")
+                                .clicked()
+                            {
+                                let next = (scale / 1.25).max(fit);
+                                self.zoom = if (next - fit).abs() < 0.001 {
+                                    None
+                                } else {
+                                    Some(next)
+                                };
+                            }
+                            ui.label(
+                                RichText::new(format!("{:.0}%", scale * 100.0))
+                                    .size(11.5)
+                                    .color(palette.dim),
+                            );
+                            if w::icon_button(ui, w::Icon::ZoomIn, palette)
+                                .on_hover_text("Zoom in")
+                                .clicked()
+                            {
+                                self.zoom = Some((scale * 1.25).min(MAX_ZOOM));
+                            }
+                            if w::icon_button(ui, w::Icon::Maximize, palette)
+                                .on_hover_text("Fit to window")
+                                .clicked()
+                            {
+                                self.zoom = None;
+                                self.pan = Vec2::ZERO;
+                            }
+                        });
+                    });
+            });
     }
 
     fn handle_dropped_files(&mut self, ctx: &egui::Context) {
@@ -1518,6 +1727,83 @@ impl GalleryApp {
             });
         ctx.request_repaint_after(Duration::from_millis(200));
     }
+
+    /// Invisible edge/corner strips for resizing an undecorated (CSD) window.
+    fn window_resize_handles(&self, ctx: &egui::Context) {
+        let maximized = ctx.input(|input| input.viewport().maximized.unwrap_or(false));
+        if maximized {
+            return;
+        }
+        let screen = ctx.content_rect();
+        const EDGE: f32 = 6.0;
+        type Handle = (Rect, egui::ResizeDirection, egui::CursorIcon);
+        let handles: [Handle; 8] = [
+            (
+                Rect::from_min_max(screen.min, egui::pos2(screen.max.x, screen.min.y + EDGE)),
+                egui::ResizeDirection::North,
+                egui::CursorIcon::ResizeVertical,
+            ),
+            (
+                Rect::from_min_max(egui::pos2(screen.min.x, screen.max.y - EDGE), screen.max),
+                egui::ResizeDirection::South,
+                egui::CursorIcon::ResizeVertical,
+            ),
+            (
+                Rect::from_min_max(screen.min, egui::pos2(screen.min.x + EDGE, screen.max.y)),
+                egui::ResizeDirection::West,
+                egui::CursorIcon::ResizeHorizontal,
+            ),
+            (
+                Rect::from_min_max(egui::pos2(screen.max.x - EDGE, screen.min.y), screen.max),
+                egui::ResizeDirection::East,
+                egui::CursorIcon::ResizeHorizontal,
+            ),
+            (
+                Rect::from_min_size(screen.min, Vec2::splat(EDGE)),
+                egui::ResizeDirection::NorthWest,
+                egui::CursorIcon::ResizeNwSe,
+            ),
+            (
+                Rect::from_min_size(
+                    egui::pos2(screen.max.x - EDGE, screen.min.y),
+                    Vec2::splat(EDGE),
+                ),
+                egui::ResizeDirection::NorthEast,
+                egui::CursorIcon::ResizeNeSw,
+            ),
+            (
+                Rect::from_min_size(
+                    egui::pos2(screen.min.x, screen.max.y - EDGE),
+                    Vec2::splat(EDGE),
+                ),
+                egui::ResizeDirection::SouthWest,
+                egui::CursorIcon::ResizeNeSw,
+            ),
+            (
+                Rect::from_min_size(
+                    egui::pos2(screen.max.x - EDGE, screen.max.y - EDGE),
+                    Vec2::splat(EDGE),
+                ),
+                egui::ResizeDirection::SouthEast,
+                egui::CursorIcon::ResizeNwSe,
+            ),
+        ];
+        for (index, (rect, direction, cursor)) in handles.into_iter().enumerate() {
+            egui::Area::new(Id::unique(("window-resize", index)))
+                .order(egui::Order::Foreground)
+                .fixed_pos(rect.min)
+                .show(ctx, |ui| {
+                    let (_, response) = ui.allocate_exact_size(rect.size(), Sense::drag());
+                    if response.hovered() {
+                        ui.ctx().set_cursor_icon(cursor);
+                    }
+                    if response.drag_started() {
+                        ui.ctx()
+                            .send_viewport_cmd(egui::ViewportCommand::BeginResize(direction));
+                    }
+                });
+        }
+    }
 }
 
 impl eframe::App for GalleryApp {
@@ -1542,6 +1828,7 @@ impl eframe::App for GalleryApp {
         self.central(ui);
         self.sync_filters();
         self.toast(&ctx);
+        self.window_resize_handles(&ctx);
 
         if self.scanning
             || self.viewer.loading
@@ -1552,6 +1839,7 @@ impl eframe::App for GalleryApp {
             ctx.request_repaint_after(Duration::from_millis(60));
         }
     }
+
 }
 
 fn sidebar_row(
@@ -1785,8 +2073,19 @@ fn draw_texture(ui: &Ui, texture_id: egui::TextureId, rect: Rect, tint: Color32)
     );
 }
 
-fn viewer_target(stage: Rect, pixels_per_point: f32) -> [u32; 2] {
-    let scale = pixels_per_point.max(1.0) * 1.15;
+fn viewer_target(stage: Rect, pixels_per_point: f32, zoom_factor: f32) -> [u32; 2] {
+    // Decode extra resolution only in coarse steps so wheel zooming does not
+    // queue a new decode for every notch.
+    let factor = if zoom_factor >= 6.0 {
+        8.0
+    } else if zoom_factor >= 3.0 {
+        4.0
+    } else if zoom_factor >= 1.5 {
+        2.0
+    } else {
+        1.0
+    };
+    let scale = pixels_per_point.max(1.0) * 1.15 * factor;
     let quantize = |value: f32| -> u32 {
         let value = (value.max(1.0) * scale).ceil() as u32;
         (value.div_ceil(128) * 128).clamp(512, 4096)

@@ -25,13 +25,18 @@ Browse:
 
 Edit (right-side adjust panel, RapidRAW-style layout):
 
-- Top toolbar with rotate ⟲/⟳ 90° steps, flip H/V, crop toggle, adjust toggle,
-  copy path, image-info toggle, open-in-file-manager (opens the folder and
-  selects the image when the desktop supports FileManager1), and an accent
-  Export button (full-resolution JPEG + JSON sidecar); bottom bar with filename,
-  dimensions and file size
+- Top toolbar doubles as a GNOME/libadwaita-style header bar (native
+  decorations disabled): rotate ⟲/⟳ 90° steps, flip H/V, crop toggle, adjust
+  toggle, copy path, image-info toggle, open-in-file-manager (opens the folder
+  and selects the image when the desktop supports FileManager1), accent Export,
+  and window minimize/maximize/close controls; drag the bar to move the window,
+  double-click to maximize. The bottom bar shows filename, dimensions and size
+- Zoom and pan: wheel zooms at the cursor, drag pans, double-click toggles
+  Fit ↔ 100%, with a floating bottom-right control (zoom out / percentage /
+  zoom in / fit); keys `+` `-` `0` `1`
 - Right panel switches between **Adjust** and **Image Info** (path, dimensions,
-  export size, megapixels, file size, format, modified time, edit summary)
+  export size, megapixels, file size, format, created and modified times, edit
+  summary)
 - Crop tool: on-image overlay (dim outside, rule-of-thirds grid, corner grips,
   drag), aspect presets, free straightening, crop semantics handled in GPU
   geometry (shader.wgsl), Escape exits crop first
@@ -113,6 +118,8 @@ context in a worker thread at app startup, so it does not block the UI.
 | `Home` / `End` | First / last image |
 | `Enter` | Open the selected image |
 | `E` | Toggle the adjust panel |
+| `+` / `-` | Zoom in / out (viewer) |
+| `0` / `1` | Fit to window / 100% (viewer) |
 | `Esc` | Leave crop mode, then the adjust panel, then the viewer |
 | `Esc` (no viewer) | Clear search and drop focus |
 
@@ -126,7 +133,7 @@ context in a worker thread at app startup, so it does not block the UI.
 - `src/ui/edit_panel.rs` — right adjust panel sections, crop overlay
 - `src/ui/info_panel.rs` — Image Info tab (path, dimensions, size, format, modified, edit summary)
 - `src/ui/widgets.rs` — shadcn-styled buttons, icon buttons, switch, sliders, tabs/chips, color wheels
-- `src/app.rs` — application state, layout, grid/viewer, keyboard handling, top bar rendering
+- `src/app.rs` — application state, layout, grid/viewer, zoom/pan, keyboard handling, header bar, CSD window controls and edge resizing
 - `src/grade/mod.rs` — `EditState` (crop/aspect/orientation/adjustments/HSL/grading/LUT)
 - `src/grade/gpu.rs` — `GradeCore`/`GradePass`: WGSL grading compute pipeline, uniforms, LUT registry
 - `src/grade/shader.wgsl` — geometry + color pipeline, ported math from RapidRAW
@@ -183,13 +190,13 @@ display texture. No image pixels cross PCIe or the CPU after decoding.
 
 ## Roadmap
 
-- Zoom/pan in the viewer (wheel zoom at cursor, drag pan, Fit / 100%)
+- Zoom-aware full-resolution display: dedicated 100% viewing beyond the 4096 px
+  decode cap
 - GPU nvJPEG export encode: hand the graded pixels to nvJPEG from device memory
   (the export readback path is the current bottleneck) instead of CPU JPEG
 - Re-import the sidecar to restore a grade on a previously exported image
 - Live straighten preview inside crop mode (the preview shows the unrotated
   frame; the angle applies on exit)
-- Full-resolution display textures: dedicated 100% viewing
 - Thumbnail cache size limit and cleanup
 - Remember last folder, window size, and theme between launches
 - Optional `theme.toml` runtime overrides for the compile-time tokens

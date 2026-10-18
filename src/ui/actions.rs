@@ -21,6 +21,9 @@ pub enum ActionId {
     Export,
     Theme,
     Refresh,
+    WindowMinimize,
+    WindowMaximize,
+    WindowClose,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -31,6 +34,10 @@ pub enum ButtonStyle {
     Ghost,
     /// Text-only shadcn `ghost` / `outline`.
     Text,
+    /// Header-bar window control (minimize/maximize).
+    Window,
+    /// Header-bar close control (destructive hover).
+    WindowClose,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -162,6 +169,28 @@ pub const RIGHT_ACTIONS: &[ActionSpec] = &[
         Icon::RefreshCw,
         "Refresh",
         ButtonStyle::Ghost,
+        Visibility::Always,
+    ),
+    // GNOME-style window controls at the far right.
+    icon(
+        ActionId::WindowMinimize,
+        Icon::Minimize,
+        "Minimize",
+        ButtonStyle::Window,
+        Visibility::Always,
+    ),
+    icon(
+        ActionId::WindowMaximize,
+        Icon::Maximize,
+        "Maximize",
+        ButtonStyle::Window,
+        Visibility::Always,
+    ),
+    icon(
+        ActionId::WindowClose,
+        Icon::Close,
+        "Close",
+        ButtonStyle::WindowClose,
         Visibility::Always,
     ),
 ];

@@ -19,6 +19,8 @@ pub struct ImageItem {
     pub name: String,
     pub size: u64,
     pub modified: Option<SystemTime>,
+    /// Filesystem birth time, when the platform reports it.
+    pub created: Option<SystemTime>,
 }
 
 impl ImageItem {
@@ -36,6 +38,7 @@ impl ImageItem {
             name,
             size: metadata.len(),
             modified: metadata.modified().ok(),
+            created: metadata.created().ok(),
         })
     }
 }
