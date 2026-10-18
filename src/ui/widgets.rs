@@ -1,10 +1,10 @@
-use crate::theme::Palette;
+use crate::theme::{self, Palette};
 pub use crate::ui::icons::{
     paint_folder_icon, paint_icon, paint_image_icon, paint_search_icon, Icon,
 };
 use egui::{
-    Align, Button, Color32, CornerRadius, FontId, Frame, Id, Layout, Margin, Rect, Response,
-    RichText, Sense, Stroke, StrokeKind, TextEdit, Ui, Vec2,
+    Align, Align2, Button, Color32, CornerRadius, CursorIcon, FontId, Frame, Id, Key, Layout,
+    Margin, Rect, Response, RichText, Sense, Stroke, StrokeKind, TextEdit, TextStyle, Ui, Vec2,
 };
 
 pub const SEARCH_ID: &str = "gallery-search";
@@ -47,7 +47,7 @@ pub fn accent_button(ui: &mut Ui, label: &str, palette: Palette) -> Response {
 pub fn toggle_button(ui: &mut Ui, label: &str, selected: bool, palette: Palette) -> Response {
     let m = palette.metrics;
     ui.add(
-        Button::new(RichText::new(label).size(12.0).color(if selected {
+        Button::new(RichText::new(label).size(theme::TEXT_SMALL).color(if selected {
             palette.on_accent
         } else {
             palette.text
@@ -63,7 +63,7 @@ pub fn toggle_button(ui: &mut Ui, label: &str, selected: bool, palette: Palette)
             Stroke::new(1.0, palette.input)
         })
         .corner_radius(m.radius_sm)
-        .min_size(Vec2::new(0.0, m.control_h_sm - 8.0)),
+        .min_size(Vec2::new(0.0, m.control_h_sm - 2.0)),
     )
 }
 
@@ -146,6 +146,11 @@ fn hsv_rgb(h: f32, s: f32, v: f32) -> Color32 {
     )
 }
 
+/// Public HSV helper for gradient tracks in the edit panel.
+pub fn hsv_color(h: f32, s: f32, v: f32) -> Color32 {
+    hsv_rgb(h, s, v)
+}
+
 /// A hue ring with a draggable saturation handle plus a luminance slider.
 /// `value.hue` is degrees, `value.saturation`/`value.luminance` are -/+100
 /// slider units. Returns true when the value changed.
@@ -176,14 +181,18 @@ pub fn color_wheel(
             Layout::top_down(Align::LEFT),
             |ui| {
                 ui.set_width(control_w);
-                ui.label(RichText::new(label).size(11.0).color(palette.dim));
+                ui.label(
+                    RichText::new(label)
+                        .size(theme::TEXT_CAPTION)
+                        .color(palette.dim),
+                );
                 let tint = hsv_rgb(value.hue, (value.saturation / 100.0).clamp(0.0, 1.0), 1.0);
                 let (chip, _) = ui.allocate_exact_size(
-                    Vec2::new(control_w.min(80.0), 6.0),
+                    Vec2::new(control_w.min(60.0), 5.0),
                     Sense::hover(),
                 );
-                ui.painter().rect_filled(chip, CornerRadius::same(3), tint);
-                ui.add_space(2.0);
+                ui.painter().rect_filled(chip, CornerRadius::same(2), tint);
+                ui.add_space(1.0);
                 slider_compact(
                     ui,
                     &mut value.luminance,
@@ -253,9 +262,180 @@ fn wheel_pad(ui: &mut Ui, value: &mut crate::grade::HslRange, palette: Palette) 
     changed
 }
 
-/// Lightroom-style slider row: fixed label | flexible track | fixed value.
-/// The built-in value text is hidden so a `-5.00` value cannot widen the row
-/// and move the panel.
+/// Inline value editor state for a slider, kept in egui's frame memory.
+#[derive(Clone, Default)]
+struct SliderEdit {
+    editing: bool,
+    buffer: String,
+}
+
+fn with_alpha(color: Color32, alpha: u8) -> Color32 {
+    Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha)
+}
+
+fn mix_color(a: Color32, b: Color32, t: f32) -> Color32 {
+    let t = t.clamp(0.0, 1.0);
+    Color32::from_rgb(
+        egui::lerp(a.r() as f32..=b.r() as f32, t) as u8,
+        egui::lerp(a.g() as f32..=b.g() as f32, t) as u8,
+        egui::lerp(a.b() as f32..=b.b() as f32, t) as u8,
+    )
+}
+
+fn sample_gradient(colors: &[Color32], t: f32) -> Color32 {
+    if colors.len() <= 1 {
+        return colors.first().copied().unwrap_or(Color32::TRANSPARENT);
+    }
+    let scaled = t.clamp(0.0, 1.0) * (colors.len() - 1) as f32;
+    let index = scaled.floor() as usize;
+    let fraction = scaled - index as f32;
+    let a = colors[index.min(colors.len() - 1)];
+    let b = colors[(index + 1).min(colors.len() - 1)];
+    mix_color(a, b, fraction)
+}
+
+fn paint_gradient_rail(ui: &Ui, rect: Rect, colors: &[Color32]) {
+    if colors.is_empty() {
+        return;
+    }
+    let segments = 48;
+    let mut mesh = egui::Mesh::default();
+    for i in 0..=segments {
+        let t = i as f32 / segments as f32;
+        let color = sample_gradient(colors, t);
+        let x = egui::lerp(rect.left()..=rect.right(), t);
+        mesh.colored_vertex(egui::pos2(x, rect.top()), color);
+        mesh.colored_vertex(egui::pos2(x, rect.bottom()), color);
+        if i > 0 {
+            let base = (i as u32 - 1) * 2;
+            mesh.add_triangle(base, base + 1, base + 2);
+            mesh.add_triangle(base + 1, base + 3, base + 2);
+        }
+    }
+    ui.painter().add(egui::Shape::mesh(mesh));
+}
+
+/// Draw one full-width track and handle all pointer/keyboard interaction.
+/// Returns true when the value changed.
+fn slider_track(
+    ui: &mut Ui,
+    value: &mut f32,
+    min: f32,
+    max: f32,
+    step: f32,
+    default: f32,
+    palette: Palette,
+    gradient: Option<&[Color32]>,
+    height: f32,
+    id: Id,
+) -> bool {
+    let width = ui.available_width().max(60.0);
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(width, height), Sense::click_and_drag());
+    let rail = Rect::from_center_size(
+        rect.center(),
+        Vec2::new((width - 12.0).max(20.0), 3.0),
+    );
+    let range = (max - min).max(f32::EPSILON);
+    let value_t = ((*value - min) / range).clamp(0.0, 1.0);
+    let origin_t = ((default - min) / range).clamp(0.0, 1.0);
+
+    if let Some(colors) = gradient {
+        if colors.len() > 1 {
+            paint_gradient_rail(ui, rail, colors);
+        } else {
+            ui.painter()
+                .rect_filled(rail, CornerRadius::same(2), palette.input);
+        }
+    } else {
+        ui.painter()
+            .rect_filled(rail, CornerRadius::same(2), palette.input);
+        let x0 = egui::lerp(rail.left()..=rail.right(), origin_t);
+        let x1 = egui::lerp(rail.left()..=rail.right(), value_t);
+        let fill = Rect::from_min_max(
+            egui::pos2(x0.min(x1), rail.top()),
+            egui::pos2(x0.max(x1), rail.bottom()),
+        );
+        ui.painter()
+            .rect_filled(fill, CornerRadius::same(2), with_alpha(palette.accent, 90));
+    }
+
+    let thumb_x = egui::lerp(rail.left()..=rail.right(), value_t);
+    let radius = if response.hovered() || response.dragged() {
+        6.5
+    } else {
+        5.5
+    };
+    ui.painter().circle_filled(
+        egui::pos2(thumb_x, rail.center().y),
+        radius,
+        palette.accent,
+    );
+    ui.painter().circle_stroke(
+        egui::pos2(thumb_x, rail.center().y),
+        radius,
+        Stroke::new(1.0, with_alpha(palette.on_accent, 70)),
+    );
+    if response.has_focus() {
+        ui.painter().circle_stroke(
+            egui::pos2(thumb_x, rail.center().y),
+            radius + 2.5,
+            Stroke::new(1.0, palette.ring),
+        );
+    }
+
+    if response.hovered() || response.dragged() {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+
+    let before = *value;
+    let mut changed = false;
+    if response.clicked() {
+        response.request_focus();
+    }
+    if response.is_pointer_button_down_on() || response.dragged() {
+        if let Some(pointer) = ui.input(|input| input.pointer.interact_pos()) {
+            let t = ((pointer.x - rail.left()) / rail.width()).clamp(0.0, 1.0);
+            let fine = ui.input(|input| input.modifiers.shift);
+            let effective = if fine { step * 0.2 } else { step };
+            let raw = min + t * range;
+            let snapped = if effective > 0.0 {
+                min + ((raw - min) / effective).round() * effective
+            } else {
+                raw
+            };
+            *value = snapped.clamp(min, max);
+        }
+    }
+    if response.double_clicked() {
+        *value = default;
+    }
+    if response.has_focus() {
+        let key_step = if ui.input(|input| input.modifiers.shift) {
+            step * 0.2
+        } else {
+            step
+        };
+        if ui.input(|input| input.key_pressed(Key::ArrowLeft) || input.key_pressed(Key::ArrowDown))
+        {
+            *value = (*value - key_step).clamp(min, max);
+        }
+        if ui.input(|input| input.key_pressed(Key::ArrowRight) || input.key_pressed(Key::ArrowUp))
+        {
+            *value = (*value + key_step).clamp(min, max);
+        }
+    }
+    changed |= (*value - before).abs() > f32::EPSILON;
+
+    // Keep the value cell stable when this widget is used outside the stacked
+    // row; the id is only used for focus bookkeeping.
+    let _ = id;
+    changed
+}
+
+/// RapidRAW-style slider: label and value share a fixed first row, then the
+/// track uses the full content width. Double-click the track, or click the
+/// label, to reset. Shift slows the drag down for fine control.
 pub fn slider(
     ui: &mut Ui,
     value: &mut f32,
@@ -264,71 +444,138 @@ pub fn slider(
     label: &str,
     palette: Palette,
 ) -> bool {
-    let before = *value;
-    let row_h = 26.0;
-    let label_w = 90.0;
-    let value_w = 46.0;
-    let gap = 6.0;
-    let track_w = (ui.available_width() - label_w - value_w - gap * 2.0).max(60.0);
-    let mut changed = false;
-
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = gap;
-        ui.allocate_ui_with_layout(
-            Vec2::new(label_w, row_h),
-            Layout::left_to_right(Align::Center),
-            |ui| {
-                ui.set_max_width(label_w);
-                ui.add(
-                    egui::Label::new(RichText::new(label).size(12.0).color(palette.dim))
-                        .truncate(),
-                );
-            },
-        );
-        let track = ui
-            .allocate_ui_with_layout(
-                Vec2::new(track_w, row_h),
-                Layout::left_to_right(Align::Center),
-                |ui| {
-                    ui.spacing_mut().slider_width = track_w;
-                    let widgets = &mut ui.style_mut().visuals.widgets;
-                    widgets.inactive.bg_fill = palette.input;
-                    widgets.inactive.weak_bg_fill = palette.input;
-                    widgets.hovered.bg_fill = palette.ring;
-                    widgets.hovered.weak_bg_fill = palette.ring;
-                    widgets.active.bg_fill = palette.accent;
-                    widgets.active.weak_bg_fill = palette.accent;
-                    widgets.active.fg_stroke = Stroke::new(1.0, palette.on_accent);
-                    ui.add(
-                        egui::Slider::new(value, range)
-                            .step_by(step as f64)
-                            .show_value(false),
-                    )
-                },
-            )
-            .inner;
-        changed = track.changed();
-        // Read after the slider borrow ends, so the label is current this frame.
-        let display = format_slider_value(*value, step);
-        ui.allocate_ui_with_layout(
-            Vec2::new(value_w, row_h),
-            Layout::right_to_left(Align::Center),
-            |ui| {
-                ui.label(
-                    RichText::new(display)
-                        .size(11.5)
-                        .monospace()
-                        .color(palette.text),
-                );
-            },
-        );
-    });
-
-    changed && *value != before
+    slider_impl(ui, value, range, step, label, palette, None)
 }
 
-/// Compact variant for narrow columns (color-wheel luminance): label and value
-/// share a fixed row, the full-width track sits below.
+/// Same slider with a painted gradient rail (temperature, tint, hue, HSL).
+pub fn slider_gradient(
+    ui: &mut Ui,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    step: f32,
+    label: &str,
+    palette: Palette,
+    colors: &[Color32],
+) -> bool {
+    slider_impl(ui, value, range, step, label, palette, Some(colors))
+}
+
+fn slider_impl(
+    ui: &mut Ui,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    step: f32,
+    label: &str,
+    palette: Palette,
+    gradient: Option<&[Color32]>,
+) -> bool {
+    let min = *range.start();
+    let max = *range.end();
+    if max <= min {
+        return false;
+    }
+    let default = if min <= 0.0 && max >= 0.0 { 0.0 } else { min };
+    let id = ui.scope_id().with(("slider", label));
+    let edit_id = id.with("edit");
+    let mut reset = false;
+    let mut changed = false;
+    let previous_spacing = ui.spacing().item_spacing.y;
+    ui.spacing_mut().item_spacing.y = 2.0;
+
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        let label_response = ui
+            .add(
+                egui::Label::new(
+                    RichText::new(label)
+                        .size(theme::TEXT_SMALL)
+                        .color(palette.dim),
+                )
+                .sense(Sense::click()),
+            )
+            .on_hover_text("Click to reset · Shift-drag for fine control");
+        if label_response.clicked() {
+            reset = true;
+        }
+
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let (rect, response) =
+                ui.allocate_exact_size(Vec2::new(54.0, 18.0), Sense::click());
+            let mut state = ui.data_mut(|data| {
+                data.get_temp::<SliderEdit>(edit_id).unwrap_or_default()
+            });
+
+            if state.editing {
+                let field_id = id.with("value-field");
+                let text_edit = TextEdit::singleline(&mut state.buffer)
+                    .id(field_id)
+                    .font(TextStyle::Body)
+                    .align(egui::Align2::RIGHT_CENTER)
+                    .desired_width(54.0)
+                    .margin(Margin::symmetric(3, 0));
+                let field = ui.place(rect, text_edit);
+                let enter = ui.input(|input| input.key_pressed(Key::Enter));
+                let escape = ui.input(|input| input.key_pressed(Key::Escape));
+                if escape {
+                    state.editing = false;
+                    ui.memory_mut(|memory| memory.surrender_focus(field_id));
+                } else if enter || field.lost_focus() {
+                    if let Ok(parsed) = state.buffer.trim().replace(',', ".").parse::<f32>() {
+                        let clamped = parsed.clamp(min, max);
+                        if (clamped - *value).abs() > f32::EPSILON {
+                            *value = clamped;
+                            changed = true;
+                        }
+                    }
+                    state.editing = false;
+                    ui.memory_mut(|memory| memory.surrender_focus(field_id));
+                } else if !field.has_focus() {
+                    ui.memory_mut(|memory| memory.request_focus(field_id));
+                }
+            } else {
+                ui.painter().text(
+                    egui::pos2(rect.right(), rect.center().y),
+                    Align2::RIGHT_CENTER,
+                    format_slider_value(*value, step),
+                    FontId::proportional(11.5),
+                    palette.text,
+                );
+                if response.hovered() {
+                    ui.ctx().set_cursor_icon(CursorIcon::Text);
+                }
+                if response.clicked() {
+                    state.editing = true;
+                    state.buffer = format_slider_value(*value, step);
+                    ui.memory_mut(|memory| memory.request_focus(id.with("value-field")));
+                }
+                if response.double_clicked() {
+                    reset = true;
+                }
+            }
+            ui.data_mut(|data| data.insert_temp(edit_id, state));
+        });
+    });
+
+    if reset {
+        *value = default;
+    }
+    changed |= slider_track(
+        ui,
+        value,
+        min,
+        max,
+        step,
+        default,
+        palette,
+        gradient,
+        14.0,
+        id,
+    );
+    ui.spacing_mut().item_spacing.y = previous_spacing;
+    changed || reset
+}
+
+/// Compact stacked variant for the color-wheel control column.
 pub fn slider_compact(
     ui: &mut Ui,
     value: &mut f32,
@@ -337,48 +584,70 @@ pub fn slider_compact(
     label: &str,
     palette: Palette,
 ) -> bool {
-    let before = *value;
-    let mut changed = false;
+    let min = *range.start();
+    let max = *range.end();
+    if max <= min {
+        return false;
+    }
+    let default = if min <= 0.0 && max >= 0.0 { 0.0 } else { min };
+    let mut reset = false;
+    let previous_spacing = ui.spacing().item_spacing.y;
+    ui.spacing_mut().item_spacing.y = 1.0;
     ui.horizontal(|ui| {
-        ui.label(RichText::new(label).size(11.0).color(palette.dim));
+        ui.spacing_mut().item_spacing.x = 4.0;
+        let label_response = ui
+            .add(
+                egui::Label::new(
+                    RichText::new(label)
+                        .size(theme::TEXT_CAPTION)
+                        .color(palette.dim),
+                )
+                .sense(Sense::click()),
+            )
+            .on_hover_text("Click to reset · Shift-drag for fine control");
+        if label_response.clicked() {
+            reset = true;
+        }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.label(
                 RichText::new(format_slider_value(*value, step))
-                    .size(11.0)
-                    .monospace()
+                    .size(theme::TEXT_CAPTION)
                     .color(palette.text),
             );
         });
     });
-    let width = ui.available_width().max(60.0);
-    let response = ui
-        .scope(|ui| {
-            ui.spacing_mut().slider_width = width;
-            let widgets = &mut ui.style_mut().visuals.widgets;
-            widgets.inactive.bg_fill = palette.input;
-            widgets.inactive.weak_bg_fill = palette.input;
-            widgets.hovered.bg_fill = palette.ring;
-            widgets.hovered.weak_bg_fill = palette.ring;
-            widgets.active.bg_fill = palette.accent;
-            widgets.active.weak_bg_fill = palette.accent;
-            ui.add(
-                egui::Slider::new(value, range)
-                    .step_by(step as f64)
-                    .show_value(false),
-            )
-        })
-        .inner;
-    changed |= response.changed();
-    changed && *value != before
+    if reset {
+        *value = default;
+    }
+    let changed = slider_track(
+        ui,
+        value,
+        min,
+        max,
+        step,
+        default,
+        palette,
+        None,
+        12.0,
+        ui.scope_id().with(("slider-compact", label)),
+    ) || reset;
+    ui.spacing_mut().item_spacing.y = previous_spacing;
+    changed
 }
 
 /// Fixed-width numeric label: two decimals for 0.01 steps, one for 0.1, none
 /// for integers. The explicit sign keeps the value column aligned.
 fn format_slider_value(value: f32, step: f32) -> String {
-    if step >= 1.0 {
-        format!("{value:+.0}")
-    } else if step >= 0.1 {
-        format!("{value:+.1}")
+    if value.abs() < 0.000_5 {
+        return "0".to_owned();
+    }
+    let off_step = step > 0.0 && (value / step).fract().abs() > 0.000_5;
+    if step >= 0.1 && !off_step {
+        if step >= 1.0 {
+            format!("{value:+.0}")
+        } else {
+            format!("{value:+.1}")
+        }
     } else {
         format!("{value:+.2}")
     }
@@ -460,14 +729,171 @@ pub fn search_field(ui: &mut Ui, text: &mut String, width: f32, palette: Palette
 pub fn small_caps(ui: &mut Ui, text: &str, palette: Palette) {
     ui.label(
         RichText::new(text.to_uppercase())
-            .font(FontId::proportional(10.5))
+            .font(FontId::proportional(theme::TEXT_CAPTION))
             .color(palette.dim),
     );
 }
 
+/// Compact track without a label/value row, used by the bottom zoom control.
+pub fn rail_slider(
+    ui: &mut Ui,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    step: f32,
+    palette: Palette,
+) -> bool {
+    let min = *range.start();
+    let max = *range.end();
+    let default = if min <= 0.0 && max >= 0.0 { 0.0 } else { min };
+    slider_track(
+        ui,
+        value,
+        min,
+        max,
+        step,
+        default,
+        palette,
+        None,
+        12.0,
+        ui.scope_id(),
+    )
+}
+
+/// One collapsible section in a flush panel: a compact header row with a top
+/// separator, a right-hand chevron, and no card surface. This is the VS Code /
+/// Zed panel rhythm rather than a floating card.
+pub fn section_card(
+    ui: &mut Ui,
+    title: &str,
+    open: &mut bool,
+    palette: Palette,
+    add_contents: impl FnOnce(&mut Ui),
+) {
+    let m = palette.metrics;
+    ui.push_id(("section", title), |ui| {
+        let (rect, response) = ui.allocate_exact_size(
+            Vec2::new(ui.available_width(), m.section_header_h),
+            Sense::click(),
+        );
+        ui.painter().line_segment(
+            [rect.left_top(), rect.right_top()],
+            Stroke::new(1.0, palette.border),
+        );
+        if response.hovered() || response.is_pointer_button_down_on() {
+            ui.painter()
+                .rect_filled(rect, CornerRadius::ZERO, palette.card_hover);
+        }
+        ui.painter().text(
+            egui::pos2(rect.left() + 2.0, rect.center().y),
+            Align2::LEFT_CENTER,
+            title,
+            theme::bold_font(theme::TEXT_SECTION),
+            palette.text,
+        );
+
+        let t = ui.ctx().animate_bool_with_time(
+            ui.make_persistent_id("section-chevron"),
+            *open,
+            0.14,
+        );
+        let center = egui::pos2(rect.right() - 10.0, rect.center().y);
+        let closed = [(-1.5, -3.5), (1.5, 0.0), (-1.5, 3.5)];
+        let opened = [(-3.5, -1.5), (0.0, 1.5), (3.5, -1.5)];
+        let mut points = [egui::Pos2::ZERO; 3];
+        for i in 0..3 {
+            points[i] = center
+                + egui::vec2(
+                    egui::lerp(closed[i].0..=opened[i].0, t),
+                    egui::lerp(closed[i].1..=opened[i].1, t),
+                );
+        }
+        ui.painter().add(egui::Shape::line(
+            points.to_vec(),
+            Stroke::new(1.3, palette.dim),
+        ));
+
+        if response.clicked() {
+            *open = !*open;
+        }
+        if *open {
+            Frame::new()
+                .inner_margin(Margin {
+                    left: 0,
+                    right: 0,
+                    top: 2,
+                    bottom: 6,
+                })
+                .show(ui, add_contents);
+        }
+    });
+}
+
+/// Compact text tabs with an accent underline (VS Code / Zed panel tabs).
+pub fn tabs(ui: &mut Ui, options: &[(&str, bool)], palette: Palette) -> Option<usize> {
+    let mut clicked = None;
+    ui.spacing_mut().item_spacing.x = 2.0;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        for (index, (label, active)) in options.iter().enumerate() {
+            let width = 62.0;
+            let (rect, response) =
+                ui.allocate_exact_size(Vec2::new(width, 26.0), Sense::click());
+            if *active {
+                ui.painter().rect_filled(
+                    Rect::from_min_max(
+                        egui::pos2(rect.left(), rect.bottom() - 2.0),
+                        rect.right_bottom(),
+                    ),
+                    CornerRadius::ZERO,
+                    palette.accent,
+                );
+            } else if response.hovered() {
+                ui.painter()
+                    .rect_filled(rect, CornerRadius::same(3), palette.card_hover);
+            }
+            ui.painter().text(
+                egui::pos2(rect.left() + 8.0, rect.center().y - 1.0),
+                Align2::LEFT_CENTER,
+                *label,
+                FontId::proportional(theme::TEXT_BODY),
+                if *active { palette.text } else { palette.dim },
+            );
+            if response.clicked() {
+                clicked = Some(index);
+            }
+        }
+    });
+    clicked
+}
+
 /// Ghost icon button (transparent until hovered), shadcn `ghost`/`sm` style.
 pub fn icon_button(ui: &mut Ui, icon: Icon, palette: Palette) -> Response {
-    ghost_icon_button(ui, icon, palette, palette.text)
+    ghost_icon_button(ui, icon, palette, palette.dim)
+}
+
+/// 20 px status-bar button. Keeps the bottom bar compact without shrinking the
+/// normal toolbar hit targets.
+pub fn status_icon_button(
+    ui: &mut Ui,
+    icon: Icon,
+    active: bool,
+    palette: Palette,
+) -> Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(20.0), Sense::click());
+    if active || response.hovered() || response.is_pointer_button_down_on() {
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(3),
+            palette.card_hover,
+        );
+    }
+    paint_icon(
+        ui,
+        icon,
+        rect.shrink(4.0),
+        if active { palette.text } else { palette.dim },
+    );
+    response
 }
 
 /// Accent-filled icon button (shadcn `primary`/`sm`).
@@ -481,7 +907,7 @@ pub fn accent_icon_button(ui: &mut Ui, icon: Icon, palette: Palette) -> Response
     };
     ui.painter()
         .rect_filled(rect, CornerRadius::same(m.radius_md), fill);
-    paint_icon(ui, icon, rect.shrink(m.space_sm), palette.on_accent);
+    paint_icon(ui, icon, rect.shrink(6.5), palette.on_accent);
     response
 }
 
@@ -503,25 +929,26 @@ pub fn toggle_icon_button(
             .rect_filled(rect, CornerRadius::same(m.radius_md), palette.card_hover);
     }
     let color = if active { palette.text } else { palette.dim };
-    paint_icon(ui, icon, rect.shrink(m.space_sm), color);
+    paint_icon(ui, icon, rect.shrink(6.5), color);
     response
 }
 
 fn ghost_icon_button(ui: &mut Ui, icon: Icon, palette: Palette, color: Color32) -> Response {
     let m = palette.metrics;
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(m.icon_button), Sense::click());
-    if response.hovered() || response.is_pointer_button_down_on() {
+    let hovered = response.hovered() || response.is_pointer_button_down_on();
+    if hovered {
         ui.painter()
             .rect_filled(rect, CornerRadius::same(m.radius_md), palette.card_hover);
     }
-    let inner = rect.shrink(m.space_sm);
-    paint_icon(ui, icon, inner, color);
+    let inner = rect.shrink(6.5);
+    paint_icon(ui, icon, inner, if hovered { palette.text } else { color });
     response
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{color_wheel, format_slider_value, search_field, slider};
+    use super::{color_wheel, format_slider_value, search_field, section_card, slider, tabs};
     use crate::ui::tokens::Palette;
     use egui::Layout;
 
@@ -529,10 +956,12 @@ mod tests {
     fn slider_values_have_a_stable_column() {
         assert_eq!(format_slider_value(-5.0, 0.01), "-5.00");
         assert_eq!(format_slider_value(5.0, 0.01), "+5.00");
-        assert_eq!(format_slider_value(0.0, 0.01), "+0.00");
+        assert_eq!(format_slider_value(0.0, 0.01), "0");
         assert_eq!(format_slider_value(-2.5, 0.5), "-2.5");
         assert_eq!(format_slider_value(5.0, 1.0), "+5");
         assert_eq!(format_slider_value(-100.0, 1.0), "-100");
+        assert_eq!(format_slider_value(0.2, 1.0), "+0.20");
+        assert_eq!(format_slider_value(0.15, 0.1), "+0.15");
     }
 
     #[test]
@@ -576,6 +1005,31 @@ mod tests {
                     "next widget starts at {next}, expected {expected} (box left)"
                 );
             });
+        });
+    }
+
+    #[test]
+    fn section_card_fits_the_panel_width() {
+        let palette = Palette::dark();
+        egui::__run_test_ui(|ui| {
+            ui.set_width(254.0);
+            let mut open = true;
+            section_card(ui, "Light", &mut open, palette, |ui| {
+                ui.label("contents");
+            });
+            let width = ui.min_rect().width();
+            assert!(width <= 254.5, "section card is {width} wide, panel is 254");
+        });
+    }
+
+    #[test]
+    fn tabs_fit_the_panel_width() {
+        let palette = Palette::dark();
+        egui::__run_test_ui(|ui| {
+            ui.set_width(254.0);
+            let _ = tabs(ui, &[("Adjust", true), ("Info", false)], palette);
+            let width = ui.min_rect().width();
+            assert!(width <= 254.5, "tabs are {width} wide, panel is 254");
         });
     }
 }

@@ -54,6 +54,15 @@ pub fn system_prefers_dark() -> bool {
 
 pub use crate::ui::tokens::Palette;
 
+/// One type ramp for the whole app. Keep every new label on one of these
+/// roles instead of picking a size at the call site.
+pub const TEXT_CAPTION: f32 = 10.5;
+pub const TEXT_SMALL: f32 = 11.5;
+pub const TEXT_BODY: f32 = 12.5;
+pub const TEXT_SECTION: f32 = 12.5;
+pub const TEXT_TITLE: f32 = 15.0;
+pub const TEXT_HEADING: f32 = 17.0;
+
 /// Bundled Inter text faces (SIL OFL 1.1, see `assets/fonts/LICENSE.txt`). The
 /// release's static text cut renders better at UI sizes than the 18 pt
 /// optical-size cut.
@@ -95,7 +104,9 @@ pub fn apply(ctx: &egui::Context, palette: Palette) {
     };
 
     visuals.dark_mode = palette.dark;
-    visuals.panel_fill = palette.bg;
+    // Panels paint their own surfaces; the window background is drawn once in
+    // `GalleryApp::ui` so the transparent corners stay transparent.
+    visuals.panel_fill = Color32::TRANSPARENT;
     visuals.window_fill = palette.sidebar;
     visuals.extreme_bg_color = palette.card;
     visuals.text_edit_bg_color = Some(palette.card);
@@ -121,7 +132,7 @@ pub fn apply(ctx: &egui::Context, palette: Palette) {
     visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, palette.text);
     visuals.widgets.noninteractive.corner_radius = CornerRadius::same(m.radius_md);
 
-    visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
+    visuals.widgets.inactive.bg_fill = palette.input;
     visuals.widgets.inactive.weak_bg_fill = palette.card;
     visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, palette.input);
     visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, palette.text);
@@ -148,20 +159,25 @@ pub fn apply(ctx: &egui::Context, palette: Palette) {
     ctx.all_styles_mut(|style| {
         style.visuals = visuals.clone();
         style.animation_time = 0.12;
-        style.spacing.item_spacing = egui::vec2(m.space_sm, m.space_sm);
-        style.spacing.button_padding = egui::vec2(m.space_md, 7.0);
-        style.spacing.menu_margin = Margin::same(m.space_sm as i8);
-        style.spacing.indent = 16.0;
+        style.spacing.item_spacing = egui::vec2(6.0, 4.0);
+        style.spacing.button_padding = egui::vec2(8.0, 4.0);
+        style.spacing.menu_margin = Margin::same(m.space_xs as i8);
+        style.spacing.indent = 12.0;
         style.spacing.interact_size = egui::vec2(m.icon_button, m.control_h_md);
+        style.spacing.scroll.floating = false;
+        style.spacing.scroll.bar_width = 5.0;
+        style.spacing.scroll.bar_inner_margin = 1.0;
+        style.spacing.scroll.bar_outer_margin = 1.0;
+        style.spacing.scroll.content_margin = Margin::same(0);
         // Fixed track width so a slider's changing value text cannot reflow the
         // surrounding panel row.
-        style.spacing.slider_width = 116.0;
+        style.spacing.slider_width = 120.0;
         style.text_styles = [
-            (TextStyle::Heading, bold_font(20.0)),
-            (TextStyle::Body, FontId::proportional(15.0)),
-            (TextStyle::Button, FontId::proportional(15.0)),
-            (TextStyle::Small, FontId::proportional(12.5)),
-            (TextStyle::Monospace, FontId::monospace(13.5)),
+            (TextStyle::Heading, bold_font(TEXT_HEADING)),
+            (TextStyle::Body, FontId::proportional(13.0)),
+            (TextStyle::Button, FontId::proportional(13.0)),
+            (TextStyle::Small, FontId::proportional(TEXT_SMALL)),
+            (TextStyle::Monospace, FontId::monospace(12.5)),
         ]
         .into();
     });

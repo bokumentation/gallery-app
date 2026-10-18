@@ -41,7 +41,11 @@ pub struct Metrics {
     pub sidebar_w: f32,
     /// Right edit/info panel width.
     pub panel_w: f32,
-    /// Bottom info bar height.
+    /// Outer window corner radius (the only rounded surface in the shell).
+    pub window_radius: u8,
+    /// Section-card header height.
+    pub section_header_h: f32,
+    /// Bottom status bar height.
     pub bottom_bar_h: f32,
     /// Grid spacing.
     pub grid_gap: f32,
@@ -59,26 +63,28 @@ pub struct Metrics {
 impl Default for Metrics {
     fn default() -> Self {
         Self {
-            radius_sm: 6,
-            radius_md: 8,
-            radius_lg: 10,
+            radius_sm: 4,
+            radius_md: 6,
+            radius_lg: 8,
             space_xs: 4.0,
             space_sm: 8.0,
             space_md: 12.0,
             space_lg: 16.0,
-            control_h_sm: 32.0,
-            control_h_md: 36.0,
-            control_h_lg: 40.0,
-            icon_button: 36.0,
+            control_h_sm: 24.0,
+            control_h_md: 28.0,
+            control_h_lg: 32.0,
+            icon_button: 26.0,
             sidebar_w: 240.0,
             panel_w: 300.0,
-            bottom_bar_h: 32.0,
-            grid_gap: 12.0,
-            grid_pad: 18.0,
-            switch_w: 40.0,
-            switch_h: 22.0,
-            slider_thumb: 14.0,
-            wheel_size: 76.0,
+            window_radius: 12,
+            section_header_h: 28.0,
+            bottom_bar_h: 24.0,
+            grid_gap: 8.0,
+            grid_pad: 12.0,
+            switch_w: 36.0,
+            switch_h: 20.0,
+            slider_thumb: 12.0,
+            wheel_size: 68.0,
         }
     }
 }
@@ -147,11 +153,11 @@ impl Palette {
     pub fn light() -> Self {
         Self {
             dark: false,
-            bg: Color32::from_rgb(255, 255, 255),
-            sidebar: Color32::from_rgb(250, 250, 250), // zinc-50
+            bg: Color32::from_rgb(245, 245, 246), // window canvas
+            sidebar: Color32::from_rgb(255, 255, 255), // floating panel surface
             header: Color32::from_rgb(255, 255, 255),
-            card: Color32::from_rgb(255, 255, 255),
-            card_hover: Color32::from_rgb(244, 244, 245), // zinc-100 (accent)
+            card: Color32::from_rgb(248, 248, 249),
+            card_hover: Color32::from_rgb(238, 238, 241), // zinc-100 (accent)
             border: Color32::from_rgb(228, 228, 231),    // zinc-200
             text: Color32::from_rgb(9, 9, 11),           // zinc-950
             dim: Color32::from_rgb(113, 113, 122),       // zinc-500

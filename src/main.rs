@@ -70,7 +70,12 @@ fn main() -> eframe::Result<()> {
             .with_inner_size([1400.0, 900.0])
             .with_min_inner_size([880.0, 560.0])
             .with_title("Gallery")
-            .with_app_id("gallery-app"),
+            .with_app_id("gallery-app")
+            // Custom GNOME-style header bar and rounded shell. The window
+            // surface is transparent so the corners outside the rounded
+            // background stay transparent.
+            .with_decorations(false)
+            .with_transparent(true),
         renderer: eframe::Renderer::Wgpu,
         wgpu_options,
         centered: true,

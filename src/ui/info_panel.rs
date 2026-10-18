@@ -4,7 +4,7 @@
 use crate::app::GalleryApp;
 use crate::theme;
 use crate::thumbs::human_size;
-use egui::{Align, Frame, Layout, Margin, RichText, Ui};
+use egui::{Align, Layout, RichText, Ui};
 use std::path::Path;
 use std::time::SystemTime;
 
@@ -16,43 +16,22 @@ pub fn panel_content(app: &mut GalleryApp, ui: &mut Ui) {
     let path = item.path.clone();
 
     ui.label(
-        RichText::new("Image Info")
-            .font(theme::bold_font(15.0))
-            .color(palette.text),
-    );
-    ui.add_space(6.0);
-
-    ui.label(
         RichText::new(&item.name)
-            .font(theme::bold_font(13.5))
+            .font(theme::bold_font(theme::TEXT_TITLE))
             .color(palette.text),
     );
-    ui.add_space(6.0);
-
-    // Path card: selectable so it can be copied by hand, with a button too.
-    Frame::new()
-        .fill(palette.card)
-        .stroke(egui::Stroke::new(1.0, palette.input))
-        .corner_radius(egui::CornerRadius::same(palette.metrics.radius_md))
-        .inner_margin(Margin::symmetric(
-            palette.metrics.space_sm as i8,
-            palette.metrics.space_xs as i8,
-        ))
-        .show(ui, |ui| {
-            ui.add(
-                egui::Label::new(
-                    RichText::new(item.path.display().to_string())
-                        .size(11.5)
-                        .monospace()
-                        .color(palette.dim),
-                )
-                .selectable(true)
-                .wrap(),
-            );
-        });
+    ui.add_space(2.0);
+    ui.add(
+        egui::Label::new(
+            RichText::new(item.path.display().to_string())
+                .size(theme::TEXT_CAPTION)
+                .monospace()
+                .color(palette.dim),
+        )
+        .selectable(true)
+        .wrap(),
+    );
     ui.add_space(10.0);
-    ui.separator();
-    ui.add_space(6.0);
 
     let dimensions = app
         .viewer
@@ -60,95 +39,135 @@ pub fn panel_content(app: &mut GalleryApp, ui: &mut Ui) {
         .or_else(|| app.thumbs.get(&path).map(|thumb| thumb.size));
     let edit = app.edits.get(&path).cloned().unwrap_or_default();
 
-    if let Some(source) = dimensions {
-        let oriented = edit.oriented_size(source);
-        let export = edit.display_size(source);
-        row(ui, "Dimensions", format!("{} × {}", source[0], source[1]), palette);
-        if oriented != source {
-            row(
-                ui,
-                "Oriented",
-                format!("{} × {}", oriented[0], oriented[1]),
-                palette,
-            );
-        }
-        if export != source {
-            row(
-                ui,
-                "Export size",
-                format!("{} × {}", export[0], export[1]),
-                palette,
-            );
-        }
+    card(ui, "File", palette, |ui| {
         row(
             ui,
-            "Megapixels",
-            format!("{:.1} MP", source[0] as f64 * source[1] as f64 / 1_000_000.0),
+            "Size",
+            format!("{} ({} bytes)", human_size(item.size), item.size),
             palette,
         );
-    } else {
-        row(ui, "Dimensions", "Loading…".to_owned(), palette);
-    }
+        row(ui, "Format", file_format(&path), palette);
+        row(ui, "Created", format_timestamp(item.created), palette);
+        row(ui, "Modified", format_timestamp(item.modified), palette);
+    });
+    ui.add_space(4.0);
 
-    row(
-        ui,
-        "File size",
-        format!("{} ({} bytes)", human_size(item.size), item.size),
-        palette,
+    card(ui, "Image", palette, |ui| {
+        if let Some(source) = dimensions {
+            let oriented = edit.oriented_size(source);
+            let export = edit.display_size(source);
+            row(
+                ui,
+                "Dimensions",
+                format!("{} × {}", source[0], source[1]),
+                palette,
+            );
+            if oriented != source {
+                row(
+                    ui,
+                    "Oriented",
+                    format!("{} × {}", oriented[0], oriented[1]),
+                    palette,
+                );
+            }
+            if export != source {
+                row(
+                    ui,
+                    "Export size",
+                    format!("{} × {}", export[0], export[1]),
+                    palette,
+                );
+            }
+            row(
+                ui,
+                "Megapixels",
+                format!(
+                    "{:.1} MP",
+                    source[0] as f64 * source[1] as f64 / 1_000_000.0
+                ),
+                palette,
+            );
+        } else {
+            row(ui, "Dimensions", "Loading…".to_owned(), palette);
+        }
+    });
+    ui.add_space(4.0);
+
+    card(ui, "Edit Summary", palette, |ui| {
+        if edit.is_identity() {
+            ui.label(
+                RichText::new("No edits in this session")
+                    .size(theme::TEXT_SMALL)
+                    .color(palette.dim),
+            );
+        } else {
+            let mut lines = Vec::new();
+            if edit.orientation_steps != 0 {
+                lines.push(format!("Rotate {}°", edit.orientation_steps * 90));
+            }
+            if edit.rotation != 0.0 {
+                lines.push(format!("Straighten {:.1}°", edit.rotation));
+            }
+            if edit.flip_h {
+                lines.push("Flip horizontally".to_owned());
+            }
+            if edit.flip_v {
+                lines.push("Flip vertically".to_owned());
+            }
+            if let Some(crop) = edit.crop {
+                lines.push(format!("Crop {} × {}", crop.w.round(), crop.h.round()));
+            }
+            if !edit.adjustments.is_identity() {
+                lines.push("Color adjustments".to_owned());
+            }
+            if let Some(lut) = &edit.lut {
+                lines.push(format!("LUT: {lut}"));
+            }
+            for line in lines {
+                ui.label(
+                    RichText::new(line)
+                        .size(theme::TEXT_SMALL)
+                        .color(palette.text),
+                );
+            }
+        }
+    });
+}
+
+fn card(ui: &mut Ui, title: &str, palette: crate::theme::Palette, add: impl FnOnce(&mut Ui)) {
+    let top = ui.available_rect_before_wrap();
+    ui.painter().line_segment(
+        [top.left_top(), egui::pos2(top.right(), top.top())],
+        egui::Stroke::new(1.0, palette.border),
     );
-    row(ui, "Format", file_format(&path), palette);
-    row(ui, "Created", format_timestamp(item.created), palette);
-    row(ui, "Modified", format_timestamp(item.modified), palette);
-
-    ui.add_space(10.0);
-    ui.separator();
-    ui.add_space(6.0);
-
+    ui.add_space(4.0);
     ui.label(
-        RichText::new("EDIT SUMMARY")
-            .size(10.5)
-            .color(palette.dim),
+        RichText::new(title)
+            .font(theme::bold_font(theme::TEXT_SECTION))
+            .color(palette.text),
     );
-    if edit.is_identity() {
-        ui.label(
-            RichText::new("No edits in this session")
-                .size(12.0)
-                .color(palette.dim),
-        );
-    } else {
-        let mut lines = Vec::new();
-        if edit.orientation_steps != 0 {
-            lines.push(format!("Rotate {}°", edit.orientation_steps * 90));
-        }
-        if edit.rotation != 0.0 {
-            lines.push(format!("Straighten {:.1}°", edit.rotation));
-        }
-        if edit.flip_h {
-            lines.push("Flip horizontally".to_owned());
-        }
-        if edit.flip_v {
-            lines.push("Flip vertically".to_owned());
-        }
-        if let Some(crop) = edit.crop {
-            lines.push(format!("Crop {} × {}", crop.w.round(), crop.h.round()));
-        }
-        if !edit.adjustments.is_identity() {
-            lines.push("Color adjustments".to_owned());
-        }
-        if let Some(lut) = &edit.lut {
-            lines.push(format!("LUT: {lut}"));
-        }
-        for line in lines {
-            ui.label(RichText::new(line).size(12.0).color(palette.text));
-        }
-    }
+    ui.add_space(2.0);
+    add(ui);
+    ui.add_space(6.0);
 }
 
 fn row(ui: &mut Ui, label: &str, value: String, palette: crate::theme::Palette) {
     ui.horizontal(|ui| {
-        ui.label(RichText::new(label).size(11.5).color(palette.dim));
+        ui.label(
+            RichText::new(label)
+                .size(theme::TEXT_SMALL)
+                .color(palette.dim),
+        );
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.label(RichText::new(value).size(12.0).color(palette.text));
+            ui.add(
+                egui::Label::new(
+                    RichText::new(value)
+                        .size(theme::TEXT_SMALL)
+                        .color(palette.text),
+                )
+                .truncate()
+                .sense(egui::Sense::hover()),
+            );
         });
     });
 }

@@ -16,7 +16,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-const TOP_BAR_HEIGHT: f32 = 52.0;
+const TITLE_BAR_HEIGHT: f32 = 32.0;
+const TOP_BAR_HEIGHT: f32 = 36.0;
 const MAX_ZOOM: f32 = 8.0;
 
 pub struct GalleryApp {
@@ -56,6 +57,8 @@ pub struct GalleryApp {
     pub(crate) viewer: ViewerService,
     pub(crate) edit_panel_open: bool,
     pub(crate) right_tab: RightTab,
+    /// Open/closed state for the edit-section cards, indexed by `Section::index`.
+    pub(crate) edit_open: [bool; crate::ui::layout::Section::COUNT],
     pub(crate) crop_active: bool,
     pub(crate) crop_drag: Option<crate::crop::CropDrag>,
     pub(crate) lut_names: Vec<String>,
@@ -198,6 +201,9 @@ impl GalleryApp {
             ),
             edit_panel_open: false,
             right_tab: RightTab::Edit,
+            edit_open: std::array::from_fn(|i| {
+                crate::ui::layout::EDIT_SECTIONS[i].default_open()
+            }),
             crop_active: false,
             crop_drag: None,
             lut_names: Vec::new(),
@@ -681,16 +687,270 @@ impl GalleryApp {
         }
     }
 
+    fn background(&self, ui: &Ui) {
+        let palette = self.palette;
+        let rect = ui.max_rect();
+        let maximized = window_maximized(ui);
+        let radius = if maximized {
+            0
+        } else {
+            palette.metrics.window_radius
+        };
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(radius), palette.bg);
+
+        // The header and status strips own the rounded window corners; all
+        // panels in between are flush and square, like VS Code / Zed.
+        let header = Rect::from_min_max(
+            rect.min,
+            egui::pos2(
+                rect.right(),
+                rect.top() + TITLE_BAR_HEIGHT + TOP_BAR_HEIGHT,
+            ),
+        );
+        ui.painter().rect_filled(
+            header,
+            CornerRadius {
+                nw: radius,
+                ne: radius,
+                sw: 0,
+                se: 0,
+            },
+            palette.header,
+        );
+        let status = Rect::from_min_max(
+            egui::pos2(rect.left(), rect.bottom() - palette.metrics.bottom_bar_h),
+            rect.max,
+        );
+        ui.painter().rect_filled(
+            status,
+            CornerRadius {
+                nw: 0,
+                ne: 0,
+                sw: radius,
+                se: radius,
+            },
+            palette.card,
+        );
+    }
+
+    fn window_border(&self, ui: &Ui) {
+        let palette = self.palette;
+        let rect = ui.max_rect();
+        let radius = if window_maximized(ui) {
+            0
+        } else {
+            palette.metrics.window_radius
+        };
+        ui.painter().rect_stroke(
+            rect.shrink(0.5),
+            CornerRadius::same(radius),
+            Stroke::new(1.0, palette.border),
+            StrokeKind::Inside,
+        );
+    }
+
+    fn title_bar(&mut self, ui: &mut Ui) {
+        let palette = self.palette;
+        let height = TITLE_BAR_HEIGHT;
+        egui::Panel::top("title_bar")
+            .exact_size(height)
+            .show_separator_line(false)
+            .frame(
+                Frame::new()
+                    .inner_margin(Margin::symmetric(8, 0)),
+            )
+            .show(ui, |ui| {
+                ui.horizontal_centered(|ui| {
+                    let controls_width = 3.0 * 24.0 + 2.0 * 6.0 + 4.0;
+                    let drag_width = (ui.available_width() - controls_width).max(120.0);
+                    let (drag_rect, drag) = ui.allocate_exact_size(
+                        Vec2::new(drag_width, height),
+                        Sense::click_and_drag(),
+                    );
+                    let icon_rect = Rect::from_center_size(
+                        egui::pos2(drag_rect.left() + 8.0, drag_rect.center().y),
+                        Vec2::splat(16.0),
+                    );
+                    ui.painter().rect_filled(
+                        icon_rect,
+                        CornerRadius::same(4),
+                        palette.accent,
+                    );
+                    w::paint_icon(ui, w::Icon::Image, icon_rect.shrink(2.0), palette.on_accent);
+
+                    let title = if self.viewer_open {
+                        self.visible
+                            .get(self.viewer_index)
+                            .and_then(|index| self.all_items.get(self.visible[*index]))
+                            .map(|item| item.name.clone())
+                            .unwrap_or_else(|| "Gallery".to_owned())
+                    } else {
+                        self.current_dir
+                            .as_deref()
+                            .map(display_name)
+                            .unwrap_or_else(|| "Gallery".to_owned())
+                    };
+                    ui.painter()
+                        .with_clip_rect(drag_rect)
+                        .text(
+                            egui::pos2(icon_rect.right() + 8.0, drag_rect.center().y),
+                            Align2::LEFT_CENTER,
+                            title,
+                            theme::bold_font(12.5),
+                            palette.text,
+                        );
+
+                    if drag.drag_started() {
+                        ui.ctx()
+                            .send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                    }
+                    if drag.double_clicked() {
+                        let maximized = window_maximized(ui);
+                        ui.ctx()
+                            .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+                    }
+
+                    let maximized = window_maximized(ui);
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if window_control(
+                            ui,
+                            w::Icon::Close,
+                            WindowControl::Close,
+                            palette,
+                        )
+                        .on_hover_text("Close")
+                        .clicked()
+                        {
+                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
+                        let icon = if maximized {
+                            w::Icon::Restore
+                        } else {
+                            w::Icon::Maximize
+                        };
+                        if window_control(ui, icon, WindowControl::Normal, palette)
+                            .on_hover_text(if maximized { "Restore" } else { "Maximize" })
+                            .clicked()
+                        {
+                            ui.ctx()
+                                .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+                        }
+                        if window_control(
+                            ui,
+                            w::Icon::Minimize,
+                            WindowControl::Normal,
+                            palette,
+                        )
+                        .on_hover_text("Minimize")
+                        .clicked()
+                        {
+                            ui.ctx()
+                                .send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                        }
+                    });
+                });
+            });
+    }
+
+    fn window_resize_edges(&self, ui: &mut Ui) {
+        if window_maximized(ui) {
+            return;
+        }
+        let screen = ui.ctx().content_rect();
+        let edge = 6.0;
+        let corner = 14.0;
+        let dirs = [
+            (
+                Rect::from_min_max(
+                    egui::pos2(screen.left(), screen.top() + corner),
+                    egui::pos2(screen.left() + edge, screen.bottom() - corner),
+                ),
+                egui::ResizeDirection::West,
+                egui::CursorIcon::ResizeHorizontal,
+            ),
+            (
+                Rect::from_min_max(
+                    egui::pos2(screen.right() - edge, screen.top() + corner),
+                    egui::pos2(screen.right(), screen.bottom() - corner),
+                ),
+                egui::ResizeDirection::East,
+                egui::CursorIcon::ResizeHorizontal,
+            ),
+            (
+                Rect::from_min_max(
+                    egui::pos2(screen.left() + corner, screen.top()),
+                    egui::pos2(screen.right() - corner, screen.top() + edge),
+                ),
+                egui::ResizeDirection::North,
+                egui::CursorIcon::ResizeVertical,
+            ),
+            (
+                Rect::from_min_max(
+                    egui::pos2(screen.left() + corner, screen.bottom() - edge),
+                    egui::pos2(screen.right() - corner, screen.bottom()),
+                ),
+                egui::ResizeDirection::South,
+                egui::CursorIcon::ResizeVertical,
+            ),
+            (
+                Rect::from_min_max(
+                    screen.left_top(),
+                    egui::pos2(screen.left() + corner, screen.top() + corner),
+                ),
+                egui::ResizeDirection::NorthWest,
+                egui::CursorIcon::ResizeNwSe,
+            ),
+            (
+                Rect::from_min_max(
+                    egui::pos2(screen.right() - corner, screen.top()),
+                    egui::pos2(screen.right(), screen.top() + corner),
+                ),
+                egui::ResizeDirection::NorthEast,
+                egui::CursorIcon::ResizeNeSw,
+            ),
+            (
+                Rect::from_min_max(
+                    egui::pos2(screen.left(), screen.bottom() - corner),
+                    egui::pos2(screen.left() + corner, screen.bottom()),
+                ),
+                egui::ResizeDirection::SouthWest,
+                egui::CursorIcon::ResizeNeSw,
+            ),
+            (
+                Rect::from_min_max(
+                    egui::pos2(screen.right() - corner, screen.bottom() - corner),
+                    screen.right_bottom(),
+                ),
+                egui::ResizeDirection::SouthEast,
+                egui::CursorIcon::ResizeNwSe,
+            ),
+        ];
+        let pointer = ui.ctx().input(|input| input.pointer.hover_pos());
+        let pressed = ui.ctx().input(|input| input.pointer.primary_pressed());
+        let Some(pointer) = pointer else {
+            return;
+        };
+        for (rect, direction, cursor) in dirs {
+            if rect.contains(pointer) {
+                ui.ctx().set_cursor_icon(cursor);
+                if pressed {
+                    ui.ctx()
+                        .send_viewport_cmd(egui::ViewportCommand::BeginResize(direction));
+                }
+                break;
+            }
+        }
+    }
+
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         use w::Icon;
         let palette = self.palette;
-        let metrics = palette.metrics;
         egui::Panel::top("top_bar")
             .exact_size(TOP_BAR_HEIGHT)
             .frame(
                 Frame::new()
-                    .fill(palette.header)
-                    .inner_margin(Margin::symmetric(10, 8)),
+                    .inner_margin(Margin::symmetric(8, 4)),
             )
             .show(ui, |ui| {
                 ui.horizontal_centered(|ui| {
@@ -701,34 +961,8 @@ impl GalleryApp {
                         self.show_sidebar = !self.show_sidebar;
                     }
 
-                    let (icon_rect, _) =
-                        ui.allocate_exact_size(Vec2::splat(26.0), Sense::hover());
-                    ui.painter().rect_filled(
-                        icon_rect,
-                        CornerRadius::same(metrics.radius_sm),
-                        palette.accent,
-                    );
-                    w::paint_icon(ui, Icon::Image, icon_rect.shrink(5.0), palette.on_accent);
-
-                    ui.label(
-                        RichText::new("Gallery")
-                            .font(theme::bold_font(15.5))
-                            .color(palette.text),
-                    );
-
-                    ui.add_space(metrics.space_xs);
                     for spec in crate::ui::actions::LEFT_ACTIONS {
                         self.render_action(ui, spec, palette);
-                    }
-
-                    // Image tools, only with an open image.
-                    if self.viewer_open {
-                        ui.add_space(metrics.space_sm);
-                        ui.separator();
-                        ui.add_space(metrics.space_xs);
-                        for spec in crate::ui::actions::MIDDLE_ACTIONS {
-                            self.render_action(ui, spec, palette);
-                        }
                     }
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -738,11 +972,6 @@ impl GalleryApp {
                     });
                 });
             });
-
-        egui::Panel::top("header_separator")
-            .exact_size(1.0)
-            .frame(Frame::new().fill(palette.border))
-            .show(ui, |_| {});
     }
 
     /// Render one top-bar action and dispatch it on click. The action lists
@@ -888,48 +1117,182 @@ impl GalleryApp {
         }
     }
 
-    fn bottom_info_bar(&mut self, ui: &mut egui::Ui) {
-        if !self.viewer_open {
-            return;
-        }
+    fn bottom_bar(&mut self, ui: &mut egui::Ui) {
         let palette = self.palette;
-        egui::Panel::bottom("info_bar")
-            .exact_size(palette.metrics.bottom_bar_h)
-            .frame(
-                Frame::new()
-                    .fill(palette.header)
-                    .inner_margin(Margin::symmetric(12, 2)),
-            )
+        let metrics = palette.metrics;
+        egui::Panel::bottom("bottom_bar")
+            .exact_size(metrics.bottom_bar_h)
+            .frame(Frame::new().inner_margin(Margin::symmetric(8, 1)))
             .show(ui, |ui| {
                 ui.horizontal_centered(|ui| {
-                    if let Some(item_index) = self.visible.get(self.viewer_index) {
-                        let item = self.all_items[*item_index].clone();
-                        ui.label(
-                            RichText::new(&item.name)
-                                .font(theme::bold_font(12.0))
-                                .color(palette.text),
-                        );
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            let dims = self
-                                .viewer
-                                .source_dimensions(&item.path)
-                                .unwrap_or([0, 0]);
-                            let kb = item.size as f64 / 1024.0;
-                            let size_text = if kb > 1024.0 {
-                                format!("{:.1} MB", kb / 1024.0)
-                            } else {
-                                format!("{:.0} KB", kb)
-                            };
+                    if self.viewer_open {
+                        if let Some(item_index) = self.visible.get(self.viewer_index) {
+                            let item = self.all_items[*item_index].clone();
+                            ui.allocate_ui_with_layout(
+                                Vec2::new(190.0, 20.0),
+                                Layout::left_to_right(Align::Center),
+                                |ui| {
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(&item.name)
+                                                .font(theme::bold_font(11.5))
+                                                .color(palette.text),
+                                        )
+                                        .truncate(),
+                                    );
+                                },
+                            );
                             ui.label(
                                 RichText::new(format!(
-                                    "{} × {}  ·  {}",
-                                    dims[0], dims[1], size_text
+                                    "{} / {}",
+                                    self.viewer_index + 1,
+                                    self.visible.len()
                                 ))
-                                .size(12.0)
+                                .size(theme::TEXT_SMALL)
                                 .color(palette.dim),
                             );
-                        });
+                            if let Some(dimensions) = self.viewer.source_dimensions(&item.path) {
+                                ui.label(
+                                    RichText::new(format!(
+                                        "{} × {}",
+                                        dimensions[0], dimensions[1]
+                                    ))
+                                    .size(theme::TEXT_SMALL)
+                                    .color(palette.dim),
+                                );
+                            }
+                            ui.label(
+                                RichText::new(human_size(item.size))
+                                    .size(theme::TEXT_SMALL)
+                                    .color(palette.dim),
+                            );
+                        }
+                    } else {
+                        let folder = self
+                            .current_dir
+                            .as_deref()
+                            .map(display_name)
+                            .unwrap_or_else(|| "Gallery".to_owned());
+                        ui.allocate_ui_with_layout(
+                            Vec2::new(190.0, 20.0),
+                            Layout::left_to_right(Align::Center),
+                            |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(folder)
+                                            .font(theme::bold_font(11.5))
+                                            .color(palette.text),
+                                    )
+                                    .truncate(),
+                                );
+                            },
+                        );
+                        let count = self.visible.len();
+                        ui.label(
+                            RichText::new(format!(
+                                "{count} image{}",
+                                if count == 1 { "" } else { "s" }
+                            ))
+                            .size(theme::TEXT_SMALL)
+                            .color(palette.dim),
+                        );
+                        if self.selection.is_some() {
+                            ui.label(
+                                RichText::new("1 selected")
+                                    .size(theme::TEXT_SMALL)
+                                    .color(palette.accent),
+                            );
+                        }
                     }
+
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        let adjust_active =
+                            self.edit_panel_open && self.right_tab == RightTab::Edit;
+                        if w::status_icon_button(ui, w::Icon::Sliders, adjust_active, palette)
+                            .on_hover_text("Adjust panel")
+                            .clicked()
+                        {
+                            if self.edit_panel_open {
+                                self.edit_panel_open = false;
+                            } else {
+                                self.edit_panel_open = true;
+                                self.right_tab = RightTab::Edit;
+                            }
+                        }
+                        if w::status_icon_button(ui, w::Icon::Menu, self.show_sidebar, palette)
+                            .on_hover_text("Toggle sidebar")
+                            .clicked()
+                        {
+                            self.show_sidebar = !self.show_sidebar;
+                        }
+
+                        if self.viewer_open {
+                            let fit = self.viewer_fit.max(0.001);
+                            let mut scale = self.zoom.unwrap_or(fit).clamp(fit, MAX_ZOOM);
+                            if w::status_icon_button(
+                                ui,
+                                w::Icon::Maximize,
+                                false,
+                                palette,
+                            )
+                            .on_hover_text("Fit to window")
+                            .clicked()
+                            {
+                                self.zoom = None;
+                                self.pan = Vec2::ZERO;
+                                scale = fit;
+                            }
+                            ui.allocate_ui_with_layout(
+                                Vec2::new(34.0, 20.0),
+                                Layout::right_to_left(Align::Center),
+                                |ui| {
+                                    ui.label(
+                                        RichText::new(format!("{:.0}%", scale * 100.0))
+                                            .size(theme::TEXT_SMALL)
+                                            .color(palette.dim),
+                                    );
+                                },
+                            );
+                            let changed = ui
+                                .allocate_ui_with_layout(
+                                    Vec2::new(70.0, 14.0),
+                                    Layout::left_to_right(Align::Center),
+                                    |ui| {
+                                        w::rail_slider(
+                                            ui,
+                                            &mut scale,
+                                            fit..=MAX_ZOOM,
+                                            0.01,
+                                            palette,
+                                        )
+                                    },
+                                )
+                                .inner;
+                            if changed {
+                                self.zoom = if (scale - fit).abs() < 0.001 {
+                                    None
+                                } else {
+                                    Some(scale)
+                                };
+                            }
+                            if w::status_icon_button(
+                                ui,
+                                w::Icon::ZoomOut,
+                                false,
+                                palette,
+                            )
+                            .on_hover_text("Zoom out")
+                            .clicked()
+                            {
+                                let next = (scale / 1.25).max(fit);
+                                self.zoom = if (next - fit).abs() < 0.001 {
+                                    None
+                                } else {
+                                    Some(next)
+                                };
+                            }
+                        }
+                    });
                 });
             });
     }
@@ -939,15 +1302,16 @@ impl GalleryApp {
         egui::Panel::left("sidebar")
             .resizable(true)
             .default_size(palette.metrics.sidebar_w)
-            .size_range(190.0..=390.0)
+            .size_range(180.0..=380.0)
             .frame(
                 Frame::new()
                     .fill(palette.sidebar)
-                    .inner_margin(Margin::symmetric(8, 10)),
+                    .inner_margin(Margin::symmetric(8, 6)),
             )
             .show(ui, |ui| {
+                ui.set_min_height(ui.available_height());
                 w::small_caps(ui, "Places", palette);
-                ui.add_space(4.0);
+                ui.add_space(2.0);
 
                 let places = self.places.clone();
                 for place in &places {
@@ -958,16 +1322,6 @@ impl GalleryApp {
                 }
 
                 ui.add_space(10.0);
-                let line_rect = ui.available_rect_before_wrap();
-                ui.painter().line_segment(
-                    [
-                        line_rect.left_top(),
-                        egui::pos2(line_rect.right(), line_rect.top()),
-                    ],
-                    Stroke::new(1.0, palette.border),
-                );
-                ui.add_space(10.0);
-
                 w::small_caps(ui, "Folders", palette);
                 ui.add_space(2.0);
 
@@ -975,6 +1329,9 @@ impl GalleryApp {
                 let selected = self.selected_folder.clone();
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
+                    .scroll_bar_visibility(
+                        egui::scroll_area::ScrollBarVisibility::AlwaysVisible,
+                    )
                     .show(ui, |ui| {
                         let expanded = &mut self.expanded;
                         tree_node_ui(
@@ -994,30 +1351,28 @@ impl GalleryApp {
     }
 
     fn central(&mut self, ui: &mut egui::Ui) {
-        let palette = self.palette;
         egui::CentralPanel::default()
-            .frame(Frame::new().fill(palette.bg).inner_margin(Margin::same(0)))
+            .frame(
+                Frame::new()
+                    .fill(Color32::TRANSPARENT)
+                    .inner_margin(Margin {
+                        left: 12,
+                        right: 12,
+                        top: 8,
+                        bottom: 6,
+                    }),
+            )
             .show(ui, |ui| {
                 if !self.viewer_open {
                     Frame::new()
-                        .inner_margin(Margin::symmetric(18, 12))
+                        .inner_margin(Margin::symmetric(0, 4))
                         .show(ui, |ui| {
                             self.content_header(ui);
                         });
 
-                    let line_rect = ui.available_rect_before_wrap();
-                    ui.painter().line_segment(
-                        [
-                            line_rect.left_top(),
-                            egui::pos2(line_rect.right(), line_rect.top()),
-                        ],
-                        Stroke::new(1.0, palette.border),
-                    );
-
-                    ui.add_space(12.0);
+                    ui.add_space(4.0);
                     self.grid_ui(ui);
                 } else {
-                    ui.add_space(4.0);
                     self.viewer_ui(ui);
                 }
             });
@@ -1025,58 +1380,32 @@ impl GalleryApp {
 
     fn content_header(&mut self, ui: &mut Ui) {
         let palette = self.palette;
-        // The one-row header needs room for the title plus the search box,
-        // S/M/L, Recursive, Sort and the count. Below this it overlaps.
-        let compact = ui.available_width() < 1000.0;
-
-        if compact {
-            ui.horizontal(|ui| {
-                self.header_title(ui, palette);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    self.header_count(ui, palette);
-                });
+        // Two stable rows: identity above, controls below. The control row
+        // wraps instead of overlapping when the central column is narrow.
+        ui.horizontal(|ui| {
+            let title_width = (ui.available_width() - 96.0).max(120.0);
+            self.header_title(ui, palette, title_width);
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                self.header_count(ui, palette);
             });
-            ui.add_space(8.0);
+        });
+        ui.add_space(6.0);
 
-            let search_width = ui.available_width().clamp(160.0, 420.0);
+        ui.horizontal_wrapped(|ui| {
+            let search_width = (ui.available_width() - 380.0).clamp(150.0, 360.0);
             if w::search_field(ui, &mut self.search, search_width, palette) {
                 self.sync_filters();
             }
-            ui.add_space(8.0);
-
-            ui.horizontal(|ui| {
-                self.header_sort(ui, palette);
-                ui.add_space(6.0);
-                self.header_size(ui);
-                ui.add_space(6.0);
-                self.header_recursive(ui, palette);
-            });
-        } else {
-            ui.horizontal(|ui| {
-                self.header_title(ui, palette);
-
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if w::search_field(ui, &mut self.search, 220.0, palette) {
-                        self.sync_filters();
-                    }
-
-                    ui.add_space(6.0);
-                    self.header_size(ui);
-
-                    ui.add_space(6.0);
-                    self.header_recursive(ui, palette);
-
-                    ui.add_space(6.0);
-                    self.header_sort(ui, palette);
-
-                    ui.add_space(4.0);
-                    self.header_count(ui, palette);
-                });
-            });
-        }
+            ui.add_space(2.0);
+            self.header_sort(ui, palette);
+            ui.add_space(2.0);
+            self.header_size(ui);
+            ui.add_space(2.0);
+            self.header_recursive(ui, palette);
+        });
     }
 
-    fn header_title(&self, ui: &mut Ui, palette: Palette) {
+    fn header_title(&self, ui: &mut Ui, palette: Palette, width: f32) {
         let title = self
             .current_dir
             .as_deref()
@@ -1087,25 +1416,27 @@ impl GalleryApp {
             .as_deref()
             .map(|path| path.display().to_string())
             .unwrap_or_default();
-        // Bound the title block so a long path cannot squeeze the search box or
-        // the S/M/L cluster; both lines ellipsize instead.
         ui.allocate_ui_with_layout(
-            Vec2::new(340.0, 36.0),
+            Vec2::new(width, 36.0),
             Layout::top_down(Align::LEFT),
             |ui| {
-                ui.set_max_width(340.0);
+                ui.set_max_width(width);
                 ui.spacing_mut().item_spacing.y = 0.0;
                 ui.add(
                     egui::Label::new(
                         RichText::new(title)
-                            .font(theme::bold_font(17.0))
+                            .font(theme::bold_font(theme::TEXT_TITLE))
                             .color(palette.text),
                     )
                     .truncate(),
                 );
                 ui.add(
-                    egui::Label::new(RichText::new(subtitle).size(11.5).color(palette.dim))
-                        .truncate(),
+                    egui::Label::new(
+                        RichText::new(subtitle)
+                            .size(theme::TEXT_CAPTION)
+                            .color(palette.dim),
+                    )
+                    .truncate(),
                 );
             },
         );
@@ -1121,7 +1452,11 @@ impl GalleryApp {
             } else {
                 format!("{count} images")
             };
-            let response = ui.label(RichText::new(label).size(12.0).color(palette.dim));
+            let response = ui.label(
+                RichText::new(label)
+                    .size(theme::TEXT_SMALL)
+                    .color(palette.dim),
+            );
             if let Some(elapsed) = self.scan_elapsed {
                 response.on_hover_text(format!(
                     "Scanned in {:.1} ms",
@@ -1131,16 +1466,32 @@ impl GalleryApp {
         }
     }
 
+
     fn header_sort(&mut self, ui: &mut Ui, palette: Palette) {
-        if w::flat_button(ui, &format!("Sort: {}", self.sort.label()), palette).clicked() {
+        let mut toggled = false;
+        let mut flipped = false;
+        ui.allocate_ui_with_layout(
+            Vec2::new(136.0, palette.metrics.control_h_md),
+            Layout::left_to_right(Align::Center),
+            |ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                if w::flat_button(ui, &format!("Sort: {}", self.sort.label()), palette).clicked() {
+                    toggled = true;
+                }
+                let arrow = if self.sort_desc { "↓" } else { "↑" };
+                if w::symbol_button(ui, arrow, palette)
+                    .on_hover_text("Sort direction")
+                    .clicked()
+                {
+                    flipped = true;
+                }
+            },
+        );
+        if toggled {
             self.sort = self.sort.next();
             self.sync_filters();
         }
-        let arrow = if self.sort_desc { "↓" } else { "↑" };
-        if w::symbol_button(ui, arrow, palette)
-            .on_hover_text("Sort direction")
-            .clicked()
-        {
+        if flipped {
             self.sort_desc = !self.sort_desc;
             self.sync_filters();
         }
@@ -1173,7 +1524,11 @@ impl GalleryApp {
                 Vec2::new(124.0, palette.metrics.control_h_md),
                 Layout::left_to_right(Align::Center),
                 |ui| {
-                    ui.label(RichText::new("Recursive").size(12.0).color(palette.dim));
+                    ui.label(
+                        RichText::new("Recursive")
+                            .size(theme::TEXT_SMALL)
+                            .color(palette.dim),
+                    );
                     ui.add_space(4.0);
                     w::switch(ui, &mut recursive, palette).changed()
                 },
@@ -1195,7 +1550,7 @@ impl GalleryApp {
             return;
         }
 
-        let width = ui.available_width();
+        let width = (ui.available_width() - 7.0).max(1.0);
         let cell = self.thumb_size.px();
         let columns = (((width - metrics.grid_pad * 2.0 + metrics.grid_gap)
             / (cell + metrics.grid_gap))
@@ -1218,6 +1573,9 @@ impl GalleryApp {
         ui.add_space(2.0);
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
+            .scroll_bar_visibility(
+                egui::scroll_area::ScrollBarVisibility::AlwaysVisible,
+            )
             .show_rows(ui, row_stride, rows, |ui, row_range| {
                 let base = ui.max_rect();
                 let first_row = row_range.start;
@@ -1303,7 +1661,7 @@ impl GalleryApp {
                         ui.add_space(8.0);
                         ui.label(
                             RichText::new("Open a folder to get started")
-                                .size(15.0)
+                                .font(theme::bold_font(theme::TEXT_TITLE))
                                 .color(palette.text),
                         );
                         ui.add_space(8.0);
@@ -1327,7 +1685,11 @@ impl GalleryApp {
                         "No images in this folder"
                     };
                     ui.add_space(8.0);
-                    ui.label(RichText::new(message).size(15.0).color(palette.text));
+                    ui.label(
+                        RichText::new(message)
+                            .font(theme::bold_font(theme::TEXT_TITLE))
+                            .color(palette.text),
+                    );
                     ui.add_space(4.0);
                     ui.label(
                         RichText::new(if self.search.trim().is_empty() {
@@ -1335,7 +1697,7 @@ impl GalleryApp {
                         } else {
                             "Try a different search term."
                         })
-                        .size(12.5)
+                        .size(theme::TEXT_SMALL)
                         .color(palette.dim),
                     );
                 });
@@ -1354,47 +1716,55 @@ impl GalleryApp {
         let item = self.all_items[item_index].clone();
 
         Frame::new()
-            .inner_margin(Margin::symmetric(18, 8))
+            .inner_margin(Margin::symmetric(0, 4))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
+                let tools = crate::ui::actions::MIDDLE_ACTIONS;
+                let tools_width = tools.len() as f32 * 26.0
+                    + tools.len().saturating_sub(1) as f32 * 6.0;
+                let show_identity = ui.available_width() >= 560.0;
+                ui.horizontal_centered(|ui| {
                     if w::flat_button(ui, "‹  Back", palette).clicked() {
                         self.close_viewer();
                     }
-                    ui.add_space(6.0);
-                    ui.label(
-                        RichText::new(&item.name)
-                            .font(theme::bold_font(15.0))
-                            .color(palette.text),
-                    );
-                    ui.label(
-                        RichText::new(format!(
-                            "{} / {}",
-                            self.viewer_index + 1,
-                            self.visible.len()
-                        ))
-                        .size(12.0)
-                        .color(palette.dim),
-                    );
+                    ui.add_space(4.0);
+                    if show_identity {
+                        let reserved = tools_width + 56.0 + 16.0;
+                        let name_width = (ui.available_width() - reserved).max(80.0);
+                        ui.allocate_ui_with_layout(
+                            Vec2::new(name_width, 28.0),
+                            Layout::left_to_right(Align::Center),
+                            |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(&item.name)
+                                            .font(theme::bold_font(theme::TEXT_TITLE))
+                                            .color(palette.text),
+                                    )
+                                    .truncate(),
+                                );
+                            },
+                        );
+                        ui.label(
+                            RichText::new(format!(
+                                "{} / {}",
+                                self.viewer_index + 1,
+                                self.visible.len()
+                            ))
+                            .size(theme::TEXT_CAPTION)
+                            .color(palette.dim),
+                        );
+                    }
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if let Some(dimensions) = self.viewer.source_dimensions(&item.path) {
-                            ui.label(
-                                RichText::new(format!("{} × {}", dimensions[0], dimensions[1]))
-                                    .size(12.0)
-                                    .color(palette.dim),
-                            );
+                        for spec in tools {
+                            self.render_action(ui, spec, palette);
                         }
-                        ui.label(
-                            RichText::new(human_size(item.size))
-                                .size(12.0)
-                                .color(palette.dim),
-                        );
                     });
                 });
             });
 
         let stage = ui.available_rect_before_wrap();
-        let available = stage.shrink(26.0);
+        let available = stage.shrink(4.0);
 
         let dimensions = self
             .viewer
@@ -1512,7 +1882,6 @@ impl GalleryApp {
                 }
             } else {
                 self.viewer_canvas_input(ui, available, fit, scale);
-                self.zoom_pill(ui, available, palette, fit, scale);
             }
         } else if let Some(error) = &self.viewer.error {
             ui.allocate_ui_with_layout(
@@ -1522,11 +1891,15 @@ impl GalleryApp {
                     ui.vertical_centered(|ui| {
                         ui.label(
                             RichText::new("Could not open image")
-                                .size(16.0)
+                                .font(theme::bold_font(theme::TEXT_TITLE))
                                 .color(palette.text),
                         );
                         ui.add_space(4.0);
-                        ui.label(RichText::new(error).size(12.0).color(palette.dim));
+                        ui.label(
+                            RichText::new(error)
+                                .size(theme::TEXT_SMALL)
+                                .color(palette.dim),
+                        );
                     });
                 },
             );
@@ -1600,59 +1973,6 @@ impl GalleryApp {
         }
     }
 
-    /// Floating zoom controls in the bottom-right of the preview box.
-    fn zoom_pill(&mut self, ui: &mut Ui, available: Rect, palette: Palette, fit: f32, scale: f32) {
-        let width = 172.0;
-        let height = 44.0;
-        let origin = egui::pos2(
-            available.right() - 16.0 - width,
-            available.bottom() - 16.0 - height,
-        );
-        egui::Area::new(Id::unique("viewer-zoom-controls"))
-            .order(egui::Order::Foreground)
-            .fixed_pos(origin)
-            .show(ui.ctx(), |ui| {
-                Frame::new()
-                    .fill(palette.card)
-                    .stroke(Stroke::new(1.0, palette.input))
-                    .corner_radius(CornerRadius::same(palette.metrics.radius_lg))
-                    .inner_margin(Margin::same(3))
-                    .show(ui, |ui| {
-                        ui.horizontal_centered(|ui| {
-                            if w::icon_button(ui, w::Icon::ZoomOut, palette)
-                                .on_hover_text("Zoom out")
-                                .clicked()
-                            {
-                                let next = (scale / 1.25).max(fit);
-                                self.zoom = if (next - fit).abs() < 0.001 {
-                                    None
-                                } else {
-                                    Some(next)
-                                };
-                            }
-                            ui.label(
-                                RichText::new(format!("{:.0}%", scale * 100.0))
-                                    .size(11.5)
-                                    .color(palette.dim),
-                            );
-                            if w::icon_button(ui, w::Icon::ZoomIn, palette)
-                                .on_hover_text("Zoom in")
-                                .clicked()
-                            {
-                                self.zoom = Some((scale * 1.25).min(MAX_ZOOM));
-                            }
-                            if w::icon_button(ui, w::Icon::Maximize, palette)
-                                .on_hover_text("Fit to window")
-                                .clicked()
-                            {
-                                self.zoom = None;
-                                self.pan = Vec2::ZERO;
-                            }
-                        });
-                    });
-            });
-    }
-
     fn handle_dropped_files(&mut self, ctx: &egui::Context) {
         let dropped: Vec<PathBuf> = ctx.input(|input| {
             input
@@ -1690,15 +2010,21 @@ impl GalleryApp {
         let fill = if toast.error {
             palette.error
         } else {
-            palette.sidebar
+            palette.header
         };
         egui::Area::new(Id::unique("toast"))
-            .anchor(Align2::LEFT_BOTTOM, Vec2::new(18.0, -18.0))
+            .anchor(
+                Align2::LEFT_BOTTOM,
+                Vec2::new(
+                    18.0,
+                    -(palette.metrics.bottom_bar_h + 12.0),
+                ),
+            )
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 Frame::new()
                     .fill(fill)
-                    .corner_radius(10)
+                    .corner_radius(6)
                     .inner_margin(Margin::symmetric(14, 10))
                     .shadow(egui::epaint::Shadow {
                         offset: [0, 4],
@@ -1709,7 +2035,7 @@ impl GalleryApp {
                     .show(ui, |ui| {
                         ui.label(
                             RichText::new(&toast.message)
-                                .size(12.5)
+                                .size(theme::TEXT_SMALL)
                                 .color(if toast.error {
                                     Color32::WHITE
                                 } else {
@@ -1724,6 +2050,11 @@ impl GalleryApp {
 }
 
 impl eframe::App for GalleryApp {
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        // The window surface must be transparent outside the rounded shell.
+        [0.0, 0.0, 0.0, 0.0]
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.handle_dropped_files(&ctx);
@@ -1734,15 +2065,19 @@ impl eframe::App for GalleryApp {
         self.poll_reveal();
         self.handle_keys(&ctx);
 
+        self.background(ui);
+        self.title_bar(ui);
         self.top_bar(ui);
+        self.bottom_bar(ui);
         if self.show_sidebar {
             self.sidebar(ui);
         }
-        self.bottom_info_bar(ui);
         if self.viewer_open && self.edit_panel_open {
             crate::ui::edit_panel::show(self, ui);
         }
         self.central(ui);
+        self.window_resize_edges(ui);
+        self.window_border(ui);
         self.sync_filters();
         self.toast(&ctx);
 
@@ -1755,7 +2090,44 @@ impl eframe::App for GalleryApp {
             ctx.request_repaint_after(Duration::from_millis(60));
         }
     }
+}
 
+fn window_maximized(ui: &Ui) -> bool {
+    ui.ctx().input(|input| {
+        let viewport = input.viewport();
+        viewport.maximized.unwrap_or(false) || viewport.fullscreen.unwrap_or(false)
+    })
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WindowControl {
+    Normal,
+    Close,
+}
+
+fn window_control(
+    ui: &mut Ui,
+    icon: w::Icon,
+    kind: WindowControl,
+    palette: Palette,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(24.0), Sense::click());
+    let hovered = response.hovered() || response.is_pointer_button_down_on();
+    let fill = match (kind, hovered) {
+        (WindowControl::Close, true) => palette.error,
+        (_, true) => palette.card_hover,
+        (_, false) => Color32::TRANSPARENT,
+    };
+    if fill != Color32::TRANSPARENT {
+        ui.painter().circle_filled(rect.center(), 12.0, fill);
+    }
+    let color = if kind == WindowControl::Close && hovered {
+        Color32::WHITE
+    } else {
+        palette.dim
+    };
+    w::paint_icon(ui, icon, rect.shrink(6.0), color);
+    response
 }
 
 fn sidebar_row(
@@ -1766,30 +2138,26 @@ fn sidebar_row(
     icon: bool,
 ) -> egui::Response {
     let width = ui.available_width();
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 30.0), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 24.0), Sense::click());
     if ui.is_rect_visible(rect) {
         let fill = if selected {
-            palette.accent
-        } else if response.hovered() {
             palette.card_hover
+        } else if response.hovered() {
+            palette.card
         } else {
             Color32::TRANSPARENT
         };
         ui.painter()
-            .rect_filled(rect, CornerRadius::same(7), fill);
-        let content = if selected {
-            palette.on_accent
-        } else {
-            palette.text
-        };
+            .rect_filled(rect, CornerRadius::same(3), fill);
+        let content = palette.text;
         let mut text_x = rect.left() + 8.0;
         if icon {
             let icon_rect = Rect::from_min_size(
-                egui::pos2(rect.left() + 8.0, rect.center().y - 7.0),
-                Vec2::new(16.0, 14.0),
+                egui::pos2(rect.left() + 8.0, rect.center().y - 6.0),
+                Vec2::new(14.0, 12.0),
             );
             w::paint_folder_icon(ui, icon_rect, content.gamma_multiply(0.9));
-            text_x = icon_rect.right() + 8.0;
+            text_x = icon_rect.right() + 6.0;
         }
         ui.painter()
             .with_clip_rect(rect.shrink2(Vec2::new(4.0, 0.0)))
@@ -1797,7 +2165,7 @@ fn sidebar_row(
                 egui::pos2(text_x, rect.center().y),
                 Align2::LEFT_CENTER,
                 label,
-                FontId::proportional(13.5),
+                FontId::proportional(12.0),
                 content,
             );
     }
@@ -1817,11 +2185,11 @@ fn tree_node_ui(
     let is_expanded = expanded.contains(&node.path);
     let is_selected = selected == Some(node.path.as_path());
     let width = ui.available_width();
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 28.0), Sense::click());
-    let indent = depth as f32 * 15.0;
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 24.0), Sense::click());
+    let indent = depth as f32 * 12.0;
     let chevron_rect = Rect::from_min_size(
-        egui::pos2(rect.left() + indent + 2.0, rect.top()),
-        Vec2::new(18.0, rect.height()),
+        egui::pos2(rect.left() + indent + 1.0, rect.top()),
+        Vec2::new(16.0, rect.height()),
     );
     let chevron = ui.interact(
         chevron_rect,
@@ -1831,37 +2199,33 @@ fn tree_node_ui(
 
     if ui.is_rect_visible(rect) {
         let fill = if is_selected {
-            palette.accent
-        } else if response.hovered() || chevron.hovered() {
             palette.card_hover
+        } else if response.hovered() || chevron.hovered() {
+            palette.card
         } else {
             Color32::TRANSPARENT
         };
         ui.painter()
-            .rect_filled(rect, CornerRadius::same(7), fill);
-        let content = if is_selected {
-            palette.on_accent
-        } else {
-            palette.text
-        };
+            .rect_filled(rect, CornerRadius::same(3), fill);
+        let content = palette.text;
 
         if node.has_subdirs {
             paint_chevron(ui, chevron_rect.center(), is_expanded, content.gamma_multiply(0.8));
         }
 
         let icon_rect = Rect::from_min_size(
-            egui::pos2(chevron_rect.right() + 2.0, rect.center().y - 7.0),
-            Vec2::new(16.0, 14.0),
+            egui::pos2(chevron_rect.right() + 1.0, rect.center().y - 6.0),
+            Vec2::new(14.0, 12.0),
         );
         w::paint_folder_icon(ui, icon_rect, content.gamma_multiply(0.9));
 
         ui.painter()
             .with_clip_rect(rect.shrink2(Vec2::new(4.0, 0.0)))
             .text(
-                egui::pos2(icon_rect.right() + 7.0, rect.center().y),
+                egui::pos2(icon_rect.right() + 6.0, rect.center().y),
                 Align2::LEFT_CENTER,
                 &node.name,
-                FontId::proportional(13.0),
+                FontId::proportional(12.0),
                 content,
             );
     }
@@ -1908,7 +2272,7 @@ fn draw_cell(
     } else {
         palette.card
     };
-    painter.rect_filled(rect, CornerRadius::same(12), background);
+    painter.rect_filled(rect, CornerRadius::same(6), background);
 
     if let Some((texture_id, size)) = thumbnail {
         let inner = rect.shrink(3.0);
@@ -1929,7 +2293,7 @@ fn draw_cell(
         }
         egui::Image::new((texture_id, Vec2::new(texture_w, texture_h)))
             .uv(uv)
-            .corner_radius(CornerRadius::same(9))
+            .corner_radius(CornerRadius::same(5))
             .paint_at(ui, inner);
     } else {
         let icon_rect = Rect::from_center_size(rect.center(), Vec2::new(26.0, 22.0));
@@ -1948,7 +2312,7 @@ fn draw_cell(
             egui::pos2(bar.left() + 8.0, bar.center().y),
             Align2::LEFT_CENTER,
             label,
-            FontId::proportional(11.5),
+            FontId::proportional(11.0),
             Color32::WHITE,
         );
     }
@@ -1956,8 +2320,8 @@ fn draw_cell(
     if selected {
         painter.rect_stroke(
             rect.shrink(1.0),
-            CornerRadius::same(11),
-            Stroke::new(2.5, palette.accent),
+            CornerRadius::same(7),
+            Stroke::new(2.0, palette.accent),
             StrokeKind::Inside,
         );
 

@@ -1,7 +1,7 @@
 # Gallery
 
-A fast, shadcn-styled image gallery and editor built with Rust, egui 0.37, and
-wgpu/Vulkan.
+A fast, compact VS Code / Zed-style image gallery and editor built with Rust,
+egui 0.37, and wgpu/Vulkan. The palette follows the in-tree shadcn zinc tokens.
 
 ## Features
 
@@ -23,21 +23,33 @@ Browse:
 - Background thumbnail workers, an in-memory LRU texture cache, and a persistent JPEG thumbnail cache
 - EXIF orientation is applied when decoding
 
-Edit (right-side adjust panel, RapidRAW-style layout):
+Edit (VS Code / Zed-style compact workspace):
 
-- Native GNOME window decorations (Mutter on Wayland, or the X11 window
-  manager). The toolbar has rotate ⟲/⟳ 90° steps, flip H/V, crop and copy in
-  the middle, and Adjust / Image Info / open-in-file-manager / Export / theme /
-  refresh on the right; the bottom bar shows filename, dimensions and size
-- Lightroom-style slider rows: a fixed label column, a flexible track and a
-  fixed-width value column (the widget's own value text is hidden), so negative
-  or large values can never resize the right panel
-- The right adjust panel is user-resizable (same persisted-width behavior as the
-  folder sidebar), with an always-reserved scrollbar so opening a section never
-  shifts the controls
+- Custom GNOME-style header bar: app mark and document title, draggable title
+  area, and minimize / maximize / close controls on the right. The window uses
+  a rounded shell with transparent corners, and edge drag handles for resizing
+- Compact, flush panels: a full-height left library sidebar, the central
+  content, and the right editor panel sit edge to edge with 1 px separators.
+  Only the window shell is rounded; there are no floating cards or inset gaps
+- The 36 px toolbar keeps Open Folder, sidebar, and the right-side actions
+  (Adjust / Image Info / open-in-file-manager / Export / theme / refresh).
+  Rotate, flip, crop and copy live in the viewer toolbar
+- Two-row library header: folder name and path above, then a wrapping control
+  row with search, sort, recursive scan and the Grid size dropdown. Controls
+  wrap instead of overlapping on narrow windows
+- Flat collapsible sections with compact 28 px headers and separator lines.
+  The right panel has a VS Code-style Adjust / Info tab strip, a Reset all
+  action, and a user-resizable width (260–420 px)
+- Stacked sliders: label and editable value share the first line, and the track
+  uses the full panel width. Drag the track, Shift for fine control, click the
+  value to type, double-click the track or click the label to reset.
+  Temperature, tint, hue and HSL sliders use gradient rails
+- A 24 px bottom status bar shows filename / folder, dimensions, file size and
+  selection state on the left, with compact panel toggles and a zoom slider on
+  the right
 - Zoom and pan: wheel zooms at the cursor, drag pans, double-click toggles
-  Fit ↔ 100%, with a floating bottom-right control (zoom out / percentage /
-  zoom in / fit); keys `+` `-` `0` `1`
+  Fit ↔ 100%, with zoom out, a zoom slider, percentage, and Fit in the status
+  bar; keys `+` `-` `0` `1`
 - Right panel switches between **Adjust** and **Image Info** (path, dimensions,
   export size, megapixels, file size, format, created and modified times, edit
   summary)

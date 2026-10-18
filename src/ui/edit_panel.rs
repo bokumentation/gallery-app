@@ -9,8 +9,9 @@ use crate::app::GalleryApp;
 use crate::crop::{CropDrag, CropGeom};
 use crate::grade::{CropRect, EditState};
 use crate::theme;
+use crate::ui::layout::{RightTab, Section, EDIT_SECTIONS};
 use crate::ui::widgets as w;
-use egui::{CollapsingHeader, Color32, Frame, Margin, Rect, RichText, Ui};
+use egui::{Color32, Frame, Margin, Rect, RichText, Ui, Vec2};
 
 pub fn show(app: &mut GalleryApp, ui: &mut Ui) {
     let palette = app.palette;
@@ -25,24 +26,49 @@ pub fn show(app: &mut GalleryApp, ui: &mut Ui) {
         .frame(
             Frame::new()
                 .fill(palette.sidebar)
-                .inner_margin(Margin::symmetric(
-                    metrics.space_sm as i8,
-                    metrics.space_md as i8,
-                )),
+                .inner_margin(Margin::symmetric(8, 6)),
         )
         .show(ui, |ui| {
+            ui.set_min_height(ui.available_height());
+            let edit = app.right_tab == RightTab::Edit;
+            ui.horizontal(|ui| {
+                let tab = w::tabs(
+                    ui,
+                    &[
+                        ("Adjust", app.right_tab == RightTab::Edit),
+                        ("Info", app.right_tab == RightTab::Info),
+                    ],
+                    palette,
+                );
+                if let Some(index) = tab {
+                    app.right_tab = if index == 0 {
+                        RightTab::Edit
+                    } else {
+                        RightTab::Info
+                    };
+                }
+                if edit {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if w::flat_button(ui, "Reset all", palette).clicked() {
+                            if let Some(path) = app.current_viewer_path() {
+                                *app.edits.entry(path).or_default() = EditState::default();
+                            }
+                        }
+                    });
+                }
+            });
+            ui.add_space(2.0);
+
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 // Reserve the scrollbar width permanently: opening a tall
-                // section must not narrow the content and shift the rows.
+                // section must not narrow the content.
                 .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     match app.right_tab {
-                        crate::ui::layout::RightTab::Edit => panel_content(app, ui),
-                        crate::ui::layout::RightTab::Info => {
-                            crate::ui::info_panel::panel_content(app, ui)
-                        }
+                        RightTab::Edit => panel_content(app, ui),
+                        RightTab::Info => crate::ui::info_panel::panel_content(app, ui),
                     }
                 });
         });
@@ -54,31 +80,20 @@ fn panel_content(app: &mut GalleryApp, ui: &mut Ui) {
         return;
     };
 
-    ui.label(
-        RichText::new("Adjust")
-            .font(theme::bold_font(15.0))
-            .color(palette.text),
-    );
-    ui.add_space(6.0);
-
     // Seed the per-image edit entry so values survive the viewer.
     app.edits.entry(path.clone()).or_default();
 
-    for &section in crate::ui::layout::EDIT_SECTIONS {
-        use crate::ui::layout::Section;
-        match section {
+    for &section in EDIT_SECTIONS {
+        let mut open = app.edit_open[section.index()];
+        w::section_card(ui, section.title(), &mut open, palette, |ui| match section {
             Section::Lut => lut_section(app, &path, ui),
             Section::Light => light_section(app, &path, ui),
             Section::Color => color_section(app, &path, ui),
             Section::Hsl => hsl_section(app, &path, ui),
             Section::Grading => grading_section(app, &path, ui),
             Section::Crop => crop_section(app, &path, ui),
-        }
-    }
-
-    ui.add_space(10.0);
-    if w::accent_button(ui, "Reset all", palette).clicked() {
-        *app.edits.entry(path.clone()).or_default() = EditState::default();
+        });
+        app.edit_open[section.index()] = open;
     }
 }
 
@@ -86,66 +101,65 @@ fn panel_content(app: &mut GalleryApp, ui: &mut Ui) {
 /// global adjustment and applies before the per-slider color work.
 fn lut_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
     let palette = app.palette;
-    CollapsingHeader::new(RichText::new("LUT").size(12.5))
-        .default_open(false)
-        .show(ui, |ui| {
-            let state = app.edits.entry(path.clone()).or_default().clone();
-            ui.add_space(2.0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Lookup table").size(11.5).color(palette.dim));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if w::flat_button(ui, "Import…", palette)
-                        .on_hover_text("Import a .cube LUT file and keep it installed")
-                        .clicked()
-                    {
-                        app.import_lut();
-                    }
-                });
-            });
-
-            // Attached-LUT picker over the persisted store.
-            let mut selected = state.lut.clone().unwrap_or_else(|| "(none)".to_owned());
-            egui::ComboBox::from_id_salt("lut-picker")
-                .width(ui.available_width() - 8.0)
-                .selected_text(RichText::new(&selected).size(11.5))
-                .show_ui(ui, |ui| {
-                    let none = ui
-                        .selectable_label(selected == "(none)", RichText::new("(none)").size(11.5))
-                        .clicked();
-                    if none {
-                        selected = "(none)".to_owned();
-                    }
-                    for name in &app.lut_names {
-                        if ui
-                            .selectable_label(selected == *name, RichText::new(name).size(11.5))
-                            .clicked()
-                        {
-                            selected = name.clone();
-                        }
-                    }
-                });
-            let attached = (selected != "(none)").then(|| selected.clone());
-            if attached != state.lut {
-                let state = app.edits.get_mut(path).unwrap();
-                state.lut = attached;
+    let state = app.edits.entry(path.clone()).or_default().clone();
+    ui.add_space(2.0);
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Lookup table").size(theme::TEXT_SMALL).color(palette.dim));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if w::flat_button(ui, "Import…", palette)
+                .on_hover_text("Import a .cube LUT file and keep it installed")
+                .clicked()
+            {
+                app.import_lut();
             }
-            ui.add_space(2.0);
-            ui.label(
-                RichText::new("3D .cube files; imported LUTs stay installed.")
-                    .size(10.5)
-                    .color(palette.dim),
-            );
         });
+    });
+
+    // Attached-LUT picker over the persisted store.
+    let mut selected = state.lut.clone().unwrap_or_else(|| "(none)".to_owned());
+    egui::ComboBox::from_id_salt("lut-picker")
+        .width(ui.available_width())
+        .selected_text(RichText::new(&selected).size(theme::TEXT_SMALL))
+        .show_ui(ui, |ui| {
+            let none = ui
+                .selectable_label(
+                    selected == "(none)",
+                    RichText::new("(none)").size(theme::TEXT_SMALL),
+                )
+                .clicked();
+            if none {
+                selected = "(none)".to_owned();
+            }
+            for name in &app.lut_names {
+                if ui
+                    .selectable_label(
+                        selected == *name,
+                        RichText::new(name).size(theme::TEXT_SMALL),
+                    )
+                    .clicked()
+                {
+                    selected = name.clone();
+                }
+            }
+        });
+    let attached = (selected != "(none)").then(|| selected.clone());
+    if attached != state.lut {
+        let state = app.edits.get_mut(path).unwrap();
+        state.lut = attached;
+    }
+    ui.add_space(4.0);
+    ui.label(
+        RichText::new("3D .cube files; imported LUTs stay installed.")
+            .size(theme::TEXT_CAPTION)
+            .color(palette.dim),
+    );
 }
 
 /// The crop tool: mode switch, 90-degree steps, flips, aspect presets and the
 /// straighten slider. The on-screen frame lives in `crop_overlay`.
 fn crop_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
     let palette = app.palette;
-    CollapsingHeader::new(RichText::new("Crop").size(12.5))
-        .default_open(false)
-        .show(ui, |ui| {
-            let state = app.edits.entry(path.clone()).or_default().clone();
+    let state = app.edits.entry(path.clone()).or_default().clone();
             let source = app
                 .viewer
                 .source_dimensions(path)
@@ -203,37 +217,72 @@ fn crop_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
             });
 
             ui.add_space(4.0);
-            ui.label(RichText::new("Aspect").size(11.5).color(palette.dim));
-            ui.horizontal_wrapped(|ui| {
-                let presets: [(&str, Option<f32>); 6] = [
-                    ("Free", None),
-                    ("1:1", Some(1.0)),
-                    ("4:3", Some(4.0 / 3.0)),
-                    ("3:2", Some(3.0 / 2.0)),
-                    ("16:9", Some(16.0 / 9.0)),
-                    ("9:16", Some(9.0 / 16.0)),
-                ];
-                for (label, ratio) in presets {
-                    let selected = state.aspect == ratio;
-                    if w::toggle_button(ui, label, selected, palette).clicked() {
-                        app.crop_drag = None;
-                        let state = app.edits.get_mut(path).unwrap();
-                        let geometry = CropGeom {
-                            oriented: oriented_f32,
-                            rotation_deg: state.rotation,
-                        };
-                        // Preserve the current frame instead of resetting it:
-                        // re-fit an aspect change and re-validate for straighten.
-                        let base = state.crop.unwrap_or_else(|| geometry.centered(None));
-                        state.aspect = ratio;
-                        let next = match ratio {
-                            Some(ratio) => geometry.apply_aspect(base, ratio),
-                            None => geometry.fit(base),
-                        };
-                        normalize_crop(state, &geometry, next);
+            ui.label(
+                RichText::new("Aspect")
+                    .size(theme::TEXT_SMALL)
+                    .color(palette.dim),
+            );
+            let presets: [(&str, Option<f32>); 6] = [
+                ("Free", None),
+                ("1:1", Some(1.0)),
+                ("4:3", Some(4.0 / 3.0)),
+                ("3:2", Some(3.0 / 2.0)),
+                ("16:9", Some(16.0 / 9.0)),
+                ("9:16", Some(9.0 / 16.0)),
+            ];
+            let cell = ((ui.available_width() - 12.0) / 3.0).max(48.0);
+            egui::Grid::new("crop-aspect-grid")
+                .num_columns(3)
+                .spacing([6.0, 6.0])
+                .show(ui, |ui| {
+                    for (index, (label, ratio)) in presets.iter().enumerate() {
+                        let selected = state.aspect == *ratio;
+                        let button = egui::Button::new(
+                            RichText::new(*label).size(theme::TEXT_SMALL).color(
+                                if selected {
+                                    palette.on_accent
+                                } else {
+                                    palette.text
+                                },
+                            ),
+                        )
+                        .fill(if selected {
+                            palette.accent
+                        } else {
+                            Color32::TRANSPARENT
+                        })
+                        .stroke(if selected {
+                            egui::Stroke::NONE
+                        } else {
+                            egui::Stroke::new(1.0, palette.input)
+                        })
+                        .corner_radius(egui::CornerRadius::same(
+                            palette.metrics.radius_sm,
+                        ))
+                        .min_size(Vec2::new(cell, 28.0));
+                        if ui.add_sized([cell, 28.0], button).clicked() {
+                            app.crop_drag = None;
+                            let state = app.edits.get_mut(path).unwrap();
+                            let geometry = CropGeom {
+                                oriented: oriented_f32,
+                                rotation_deg: state.rotation,
+                            };
+                            // Preserve the current frame instead of resetting
+                            // it: re-fit an aspect change and re-validate for
+                            // straighten.
+                            let base = state.crop.unwrap_or_else(|| geometry.centered(None));
+                            state.aspect = *ratio;
+                            let next = match ratio {
+                                Some(ratio) => geometry.apply_aspect(base, *ratio),
+                                None => geometry.fit(base),
+                            };
+                            normalize_crop(state, &geometry, next);
+                        }
+                        if index % 3 == 2 {
+                            ui.end_row();
+                        }
                     }
-                }
-            });
+                });
 
             ui.add_space(4.0);
             let mut rotation = state.rotation;
@@ -256,40 +305,85 @@ fn crop_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
                 state.rotation = 0.0;
                 state.aspect = None;
             }
-        });
 }
 
 fn light_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
     let palette = app.palette;
-    CollapsingHeader::new(RichText::new("Light").size(12.5))
-        .default_open(true)
-        .show(ui, |ui| {
-            let adjustments =
-                &mut app.edits.entry(path.clone()).or_default().adjustments;
-            let _ = w::slider(ui, &mut adjustments.exposure, -5.0..=5.0, 0.01, "Exposure", palette);
-            let _ = w::slider(ui, &mut adjustments.brightness, -5.0..=5.0, 0.01, "Brightness", palette);
-            let _ = w::slider(ui, &mut adjustments.contrast, -100.0..=100.0, 1.0, "Contrast", palette);
-            let _ = w::slider(ui, &mut adjustments.highlights, -100.0..=100.0, 1.0, "Highlights", palette);
-            let _ = w::slider(ui, &mut adjustments.shadows, -100.0..=100.0, 1.0, "Shadows", palette);
-            let _ = w::slider(ui, &mut adjustments.whites, -100.0..=100.0, 1.0, "Whites", palette);
-            let _ = w::slider(ui, &mut adjustments.blacks, -100.0..=100.0, 1.0, "Blacks", palette);
-        });
+    let adjustments = &mut app.edits.entry(path.clone()).or_default().adjustments;
+    let _ = w::slider(ui, &mut adjustments.exposure, -5.0..=5.0, 0.01, "Exposure", palette);
+    let _ = w::slider(ui, &mut adjustments.brightness, -5.0..=5.0, 0.01, "Brightness", palette);
+    let _ = w::slider(ui, &mut adjustments.contrast, -100.0..=100.0, 1.0, "Contrast", palette);
+    let _ = w::slider(ui, &mut adjustments.highlights, -100.0..=100.0, 1.0, "Highlights", palette);
+    let _ = w::slider(ui, &mut adjustments.shadows, -100.0..=100.0, 1.0, "Shadows", palette);
+    let _ = w::slider(ui, &mut adjustments.whites, -100.0..=100.0, 1.0, "Whites", palette);
+    let _ = w::slider(ui, &mut adjustments.blacks, -100.0..=100.0, 1.0, "Blacks", palette);
 }
 
 fn color_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
     let palette = app.palette;
-    CollapsingHeader::new(RichText::new("Color").size(12.5))
-        .default_open(true)
-        .show(ui, |ui| {
-            let adjustments =
-                &mut app.edits.entry(path.clone()).or_default().adjustments;
-            let _ = w::slider(ui, &mut adjustments.temperature, -100.0..=100.0, 1.0, "Temperature", palette);
-            let _ = w::slider(ui, &mut adjustments.tint, -100.0..=100.0, 1.0, "Tint", palette);
-            let _ = w::slider(ui, &mut adjustments.saturation, -100.0..=100.0, 1.0, "Saturation", palette);
-            let _ = w::slider(ui, &mut adjustments.vibrance, -100.0..=100.0, 1.0, "Vibrance", palette);
-            let _ = w::slider(ui, &mut adjustments.hue, -180.0..=180.0, 1.0, "Hue", palette);
-        });
+    let adjustments = &mut app.edits.entry(path.clone()).or_default().adjustments;
+    let _ = w::slider_gradient(
+        ui,
+        &mut adjustments.temperature,
+        -100.0..=100.0,
+        1.0,
+        "Temperature",
+        palette,
+        &TEMPERATURE_GRADIENT,
+    );
+    let _ = w::slider_gradient(
+        ui,
+        &mut adjustments.tint,
+        -100.0..=100.0,
+        1.0,
+        "Tint",
+        palette,
+        &TINT_GRADIENT,
+    );
+    let _ = w::slider(ui, &mut adjustments.saturation, -100.0..=100.0, 1.0, "Saturation", palette);
+    let _ = w::slider(ui, &mut adjustments.vibrance, -100.0..=100.0, 1.0, "Vibrance", palette);
+    let _ = w::slider_gradient(
+        ui,
+        &mut adjustments.hue,
+        -180.0..=180.0,
+        1.0,
+        "Hue",
+        palette,
+        &HUE_GRADIENT,
+    );
 }
+
+const TEMPERATURE_GRADIENT: [Color32; 5] = [
+    Color32::from_rgb(45, 74, 116),
+    Color32::from_rgb(63, 148, 182),
+    Color32::from_rgb(138, 138, 138),
+    Color32::from_rgb(199, 197, 73),
+    Color32::from_rgb(199, 134, 60),
+];
+
+const TINT_GRADIENT: [Color32; 5] = [
+    Color32::from_rgb(68, 141, 65),
+    Color32::from_rgb(89, 212, 89),
+    Color32::from_rgb(138, 138, 138),
+    Color32::from_rgb(156, 84, 138),
+    Color32::from_rgb(190, 64, 159),
+];
+
+const HUE_GRADIENT: [Color32; 13] = [
+    Color32::from_rgb(130, 80, 255),
+    Color32::from_rgb(255, 80, 180),
+    Color32::from_rgb(255, 80, 80),
+    Color32::from_rgb(255, 160, 80),
+    Color32::from_rgb(255, 230, 80),
+    Color32::from_rgb(160, 240, 80),
+    Color32::from_rgb(80, 230, 120),
+    Color32::from_rgb(80, 220, 220),
+    Color32::from_rgb(80, 150, 255),
+    Color32::from_rgb(110, 100, 255),
+    Color32::from_rgb(170, 90, 255),
+    Color32::from_rgb(230, 80, 230),
+    Color32::from_rgb(130, 80, 255),
+];
 
 /// The on-screen crop frame over the drawn image: dimmed surround, thirds
 /// grid, grips and drag handling. `rect` is where the image is drawn and
@@ -467,42 +561,71 @@ fn normalize_crop(state: &mut EditState, geometry: &CropGeom, crop: CropRect) {
 /// sliders for the selected range.
 fn hsl_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
     let palette = app.palette;
-    CollapsingHeader::new(RichText::new("HSL Mixer").size(12.5))
-        .default_open(false)
-        .show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                for (index, name) in crate::grade::HSL_NAMES.iter().enumerate() {
-                    let selected = app.hsl_range == index;
-                    if w::toggle_button(ui, name, selected, palette).clicked() {
-                        app.hsl_range = index;
-                    }
-                }
-            });
-            let index = app.hsl_range.min(crate::grade::HSL_NAMES.len() - 1);
-            ui.add_space(4.0);
-            let range = &mut app.edits.entry(path.clone()).or_default().adjustments.hsl[index];
-            let _ = w::slider(ui, &mut range.hue, -100.0..=100.0, 1.0, "Hue", palette);
-            let _ = w::slider(ui, &mut range.saturation, -100.0..=100.0, 1.0, "Saturation", palette);
-            let _ = w::slider(ui, &mut range.luminance, -100.0..=100.0, 1.0, "Luminance", palette);
-        });
+    ui.horizontal_wrapped(|ui| {
+        for (index, name) in crate::grade::HSL_NAMES.iter().enumerate() {
+            let selected = app.hsl_range == index;
+            if w::toggle_button(ui, name, selected, palette).clicked() {
+                app.hsl_range = index;
+            }
+        }
+    });
+    let index = app.hsl_range.min(crate::grade::HSL_NAMES.len() - 1);
+    ui.add_space(4.0);
+    let base_hue = [0.0, 30.0, 60.0, 120.0, 180.0, 240.0, 300.0, 340.0][index];
+    let hue_colors: Vec<Color32> = [-60.0, -30.0, 0.0, 30.0, 60.0]
+        .iter()
+        .map(|offset| w::hsv_color(base_hue + offset, 0.75, 0.95))
+        .collect();
+    let saturation_colors = [
+        w::hsv_color(base_hue, 0.0, 0.85),
+        w::hsv_color(base_hue, 1.0, 0.9),
+    ];
+    let luminance_colors = [
+        Color32::BLACK,
+        w::hsv_color(base_hue, 0.8, 0.8),
+        Color32::WHITE,
+    ];
+    let range = &mut app.edits.entry(path.clone()).or_default().adjustments.hsl[index];
+    let _ = w::slider_gradient(
+        ui,
+        &mut range.hue,
+        -100.0..=100.0,
+        1.0,
+        "Hue",
+        palette,
+        &hue_colors,
+    );
+    let _ = w::slider_gradient(
+        ui,
+        &mut range.saturation,
+        -100.0..=100.0,
+        1.0,
+        "Saturation",
+        palette,
+        &saturation_colors,
+    );
+    let _ = w::slider_gradient(
+        ui,
+        &mut range.luminance,
+        -100.0..=100.0,
+        1.0,
+        "Luminance",
+        palette,
+        &luminance_colors,
+    );
 }
 
 /// Four-way split toning / color grading: shadow, midtone, highlight and global
 /// wheels with master blending and balance.
 fn grading_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
     let palette = app.palette;
-    CollapsingHeader::new(RichText::new("Color Grading").size(12.5))
-        .default_open(false)
-        .show(ui, |ui| {
-            let grading =
-                &mut app.edits.entry(path.clone()).or_default().adjustments.color_grading;
-            const LABELS: [&str; 4] = ["Shadows", "Midtones", "Highlights", "Global"];
-            for (index, label) in LABELS.iter().enumerate() {
-                let _ = w::color_wheel(ui, &mut grading.wheels[index], label, palette);
-                ui.add_space(2.0);
-            }
-            ui.add_space(4.0);
-            let _ = w::slider(ui, &mut grading.blending, 0.0..=100.0, 1.0, "Blending", palette);
-            let _ = w::slider(ui, &mut grading.balance, -100.0..=100.0, 1.0, "Balance", palette);
-        });
+    let grading = &mut app.edits.entry(path.clone()).or_default().adjustments.color_grading;
+    const LABELS: [&str; 4] = ["Shadows", "Midtones", "Highlights", "Global"];
+    for (index, label) in LABELS.iter().enumerate() {
+        let _ = w::color_wheel(ui, &mut grading.wheels[index], label, palette);
+        ui.add_space(2.0);
+    }
+    ui.add_space(4.0);
+    let _ = w::slider(ui, &mut grading.blending, 0.0..=100.0, 1.0, "Blending", palette);
+    let _ = w::slider(ui, &mut grading.balance, -100.0..=100.0, 1.0, "Balance", palette);
 }
