@@ -713,40 +713,6 @@ pub fn small_caps(ui: &mut Ui, text: &str, palette: Palette) {
     );
 }
 
-/// Replace egui's fixed low-pass wheel smoothing with the raw delta for the
-/// scroll area under the pointer. Fast wheel input then moves fast and slow
-/// input moves slowly, instead of every gesture easing in at the same rate.
-/// The scroll area still owns scrollbar dragging and programmatic scrolling.
-pub fn adaptive_scroll(ui: &mut Ui, viewport: Rect) {
-    if !ui.rect_contains_pointer(viewport) {
-        return;
-    }
-    let line_speed = ui
-        .ctx()
-        .options(|options| options.input_options.line_scroll_speed);
-    let page_height = viewport.height();
-    let raw_y = ui.input(|input| {
-        input
-            .raw
-            .events
-            .iter()
-            .filter_map(|event| match event {
-                egui::Event::MouseWheel {
-                    unit, delta, phase, ..
-                } if matches!(*phase, egui::TouchPhase::Move) => Some(match unit {
-                    egui::MouseWheelUnit::Point => delta.y,
-                    egui::MouseWheelUnit::Line => delta.y * line_speed,
-                    egui::MouseWheelUnit::Page => delta.y * page_height,
-                }),
-                _ => None,
-            })
-            .sum::<f32>()
-    });
-    // Even when this frame has no wheel event, clearing the smoothed delta
-    // prevents egui's residual low-pass tail from adding lag after a notch.
-    ui.input_mut(|input| input.smooth_scroll_delta.y = raw_y);
-}
-
 /// Compact track without a label/value row, used by the bottom zoom control.
 pub fn rail_slider(
     ui: &mut Ui,

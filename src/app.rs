@@ -1339,7 +1339,6 @@ impl GalleryApp {
 
                 let mut clicked = None;
                 let selected = self.selected_folder.clone();
-                w::adaptive_scroll(ui, ui.available_rect_before_wrap());
                 theme::with_scroll_handle(ui, palette, |ui| {
                     egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
@@ -1582,7 +1581,6 @@ impl GalleryApp {
         let selection = self.selection;
 
         ui.add_space(2.0);
-        w::adaptive_scroll(ui, ui.available_rect_before_wrap());
         theme::with_scroll_handle(ui, palette, |ui| {
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])

@@ -58,7 +58,6 @@ pub fn show(app: &mut GalleryApp, ui: &mut Ui) {
                 }
             });
             ui.add_space(2.0);
-            w::adaptive_scroll(ui, ui.available_rect_before_wrap());
 
             crate::theme::with_scroll_handle(ui, palette, |ui| {
                 egui::ScrollArea::vertical()

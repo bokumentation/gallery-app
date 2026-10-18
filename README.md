@@ -35,8 +35,8 @@ Edit (VS Code / Zed-style compact workspace):
   (Adjust / Image Info / open-in-file-manager / Export / theme / refresh).
   Rotate, flip, crop and copy-image live in the viewer toolbar
 - Floating scrollbars fade in when the pointer enters a panel and expand when
-  the bar is hovered; wheel/trackpad scrolling is applied 1:1 with the input
-  instead of egui's fixed smoothing, so fast gestures scroll fast
+  the bar is hovered; wheel scrolling keeps egui's smooth easing, with a
+  100 px line step so it matches Chrome/GTK sensitivity
 - Two-row library header: folder name and path above, then a wrapping control
   row with search, sort, recursive scan and the Grid size dropdown. Controls
   wrap instead of overlapping on narrow windows

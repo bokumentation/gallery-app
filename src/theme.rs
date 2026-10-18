@@ -196,8 +196,8 @@ pub fn apply(ctx: &egui::Context, palette: Palette) {
     });
 
     // egui defaults to 40 px per wheel line, which feels much slower than
-    // Chrome/GTK (~100 px). Grid scrolling also bypasses wheel smoothing via
-    // `widgets::adaptive_scroll`, so this is the effective per-notch distance.
+    // Chrome/GTK (~100 px). Keep egui's smooth wheel easing, but move ~100 px
+    // per notch so sensitivity matches other desktop apps.
     ctx.options_mut(|options| options.input_options.line_scroll_speed = 100.0);
 }
 
