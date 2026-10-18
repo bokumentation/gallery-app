@@ -55,25 +55,32 @@ fn run(device: &Device, queue: &Queue, path: &Path, edit: &EditState) -> Result<
     }
     let source_size = [width, height];
 
-    let pixels = if edit.is_identity() {
-        rgba.into_raw()
+    let (pixels, out_width, out_height) = if edit.is_identity() {
+        (rgba.into_raw(), width, height)
     } else {
         grade_pixels(device, queue, rgba.into_raw(), source_size, edit)?
     };
 
     let (image_path, sidecar_path) = output_paths(path);
-    let file = std::fs::File::create(&image_path)
-        .map_err(|err| format!("create {}: {err}", image_path.display()))?;
-    let mut writer = std::io::BufWriter::new(file);
     // JPEG has no alpha channel; drop it.
     let rgb: Vec<u8> = pixels
         .chunks_exact(4)
         .flat_map(|pixel| [pixel[0], pixel[1], pixel[2]])
         .collect();
-    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut writer, JPEG_QUALITY);
-    encoder
-        .encode(&rgb, width, height, image::ExtendedColorType::Rgb8)
-        .map_err(|err| format!("encode JPEG: {err}"))?;
+    // Encode into memory first so a failed encode cannot leave a truncated or
+    // 0-byte file behind (cropped/rotated output sizes differ from the source,
+    // which the encoder must be told explicitly).
+    let mut jpeg = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, JPEG_QUALITY)
+        .encode(
+            &rgb,
+            out_width,
+            out_height,
+            image::ExtendedColorType::Rgb8,
+        )
+        .map_err(|err| format!("encode JPEG ({out_width}x{out_height}): {err}"))?;
+    std::fs::write(&image_path, &jpeg)
+        .map_err(|err| format!("write {}: {err}", image_path.display()))?;
     std::fs::write(&sidecar_path, edit_sidecar(path, edit))
         .map_err(|err| format!("write {}: {err}", sidecar_path.display()))?;
 
@@ -84,14 +91,15 @@ fn run(device: &Device, queue: &Queue, path: &Path, edit: &EditState) -> Result<
 }
 
 /// Upload the full-resolution pixels, dispatch the shared grade compute pass,
-/// and copy the result back to the host.
+/// and copy the result back to the host. Returns the pixels plus the output
+/// dimensions (which differ from the source after a crop or 90/270 rotation).
 fn grade_pixels(
     device: &Device,
     queue: &Queue,
     rgba: Vec<u8>,
     source_size: [u32; 2],
     edit: &EditState,
-) -> Result<Vec<u8>, String> {
+) -> Result<(Vec<u8>, u32, u32), String> {
     let core = GradeCore::new(device, queue);
 
     let base = device.create_texture(&wgpu::TextureDescriptor {
@@ -193,7 +201,7 @@ fn grade_pixels(
     }
     drop(mapped);
     readback.unmap();
-    Ok(pixels)
+    Ok((pixels, width, height))
 }
 
 /// `<dir>/<stem>_edited.jpg` and `.json` next to the source.
@@ -366,9 +374,11 @@ mod tests {
             h: 2.0,
         });
         edit.adjustments.saturation = 100.0;
-        let graded = grade_pixels(&device, &queue, rgba.clone(), [4, 4], &edit)
-            .expect("grade + readback");
-        assert_eq!(graded.len(), 2 * 2 * 4, "crop output size");
+        let (graded, out_w, out_h) =
+            grade_pixels(&device, &queue, rgba.clone(), [4, 4], &edit)
+                .expect("grade + readback");
+        assert_eq!((out_w, out_h), (2, 2), "crop output size");
+        assert_eq!(graded.len(), 2 * 2 * 4, "crop output length");
 
         // Saturation should have changed the cropped pixels; alpha stays opaque.
         let source_pixel = &rgba[(1 * 4 + 1) * 4..(1 * 4 + 1) * 4 + 4];
@@ -396,8 +406,10 @@ mod tests {
         }
         let mut edit = EditState::default();
         edit.orientation_steps = 1;
-        let out = grade_pixels(&device, &queue, rgba, [4, 2], &edit).expect("grade + readback");
+        let (out, out_w, out_h) =
+            grade_pixels(&device, &queue, rgba, [4, 2], &edit).expect("grade + readback");
         // Oriented size is 2x4 (width x height).
+        assert_eq!((out_w, out_h), (2, 4));
         assert_eq!(out.len(), 2 * 4 * 4);
         let at = |x: usize, y: usize| -> [u8; 4] {
             let i = (y * 2 + x) * 4;
@@ -410,13 +422,8 @@ mod tests {
         assert!(at(0, 0)[0] <= 6, "got {:?}", at(0, 0));
     }
 
-    /// Full export path on a synthetic PNG: decode, grade, JPEG + sidecar.
-    #[test]
-    fn run_writes_jpeg_and_sidecar() {
-        let Some((device, queue)) = gpu() else {
-            eprintln!("no wgpu adapter; skipping export end-to-end test");
-            return;
-        };
+    /// Unique temp dir for an export test, with a synthetic PNG of `w` x `h`.
+    fn temp_png(width: u32, height: u32) -> (PathBuf, PathBuf) {
         let dir = std::env::temp_dir().join(format!(
             "gallery-export-test-{}-{}",
             std::process::id(),
@@ -427,27 +434,88 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let source = dir.join("sample.png");
-        let mut rgba = Vec::new();
-        for y in 0..8u8 {
-            for x in 0..8u8 {
-                rgba.extend_from_slice(&[40 + x * 20, 30 + y * 20, 160, 255]);
+        let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+        for y in 0..height {
+            for x in 0..width {
+                rgba.extend_from_slice(&[
+                    (40 + x * 20 % 200) as u8,
+                    (30 + y * 20 % 200) as u8,
+                    160,
+                    255,
+                ]);
             }
         }
-        image::RgbaImage::from_raw(8, 8, rgba)
+        image::RgbaImage::from_raw(width, height, rgba)
             .unwrap()
             .save(&source)
             .unwrap();
+        (dir, source)
+    }
 
+    /// Assert the exported JPEG decodes to `width` x `height` and is non-empty,
+    /// and that the sidecar was written. This is the regression guard for the
+    /// 0-byte crop bug: the encoder must be told the *output* dimensions.
+    fn assert_export(paths: &ExportPaths, width: u32, height: u32) {
+        let bytes = std::fs::read(&paths.image).unwrap();
+        assert!(!bytes.is_empty(), "exported JPEG must not be empty");
+        let decoded = image::open(&paths.image).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (width, height));
+        assert!(paths.sidecar.exists(), "sidecar written");
+    }
+
+    /// Full export path on a synthetic PNG: decode, grade, JPEG + sidecar.
+    #[test]
+    fn run_writes_jpeg_and_sidecar() {
+        let Some((device, queue)) = gpu() else {
+            eprintln!("no wgpu adapter; skipping export end-to-end test");
+            return;
+        };
+        let (dir, source) = temp_png(8, 8);
         let mut edit = EditState::default();
         edit.adjustments.saturation = 50.0;
         let paths = run(&device, &queue, &source, &edit).expect("export");
-
-        assert!(paths.image.exists(), "JPEG written");
-        let decoded = image::open(&paths.image).unwrap();
-        assert_eq!((decoded.width(), decoded.height()), (8, 8));
+        assert_export(&paths, 8, 8);
         let sidecar = std::fs::read_to_string(&paths.sidecar).unwrap();
         assert!(sidecar.contains("\"saturation\": 50"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
+    /// Cropping shrinks the output: the JPEG must be encoded at the crop size,
+    /// not the source size (the old code passed the source dims and failed with
+    /// a buffer-length error, leaving a 0-byte file).
+    #[test]
+    fn run_exports_cropped_dimensions() {
+        let Some((device, queue)) = gpu() else {
+            eprintln!("no wgpu adapter; skipping crop export test");
+            return;
+        };
+        let (dir, source) = temp_png(8, 8);
+        let mut edit = EditState::default();
+        edit.crop = Some(CropRect {
+            x: 2.0,
+            y: 1.0,
+            w: 4.0,
+            h: 3.0,
+        });
+        let paths = run(&device, &queue, &source, &edit).expect("cropped export");
+        assert_export(&paths, 4, 3);
+        let sidecar = std::fs::read_to_string(&paths.sidecar).unwrap();
+        assert!(sidecar.contains("\"crop\": { \"x\": 2"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A 90-degree step swaps the output dimensions; the JPEG must follow.
+    #[test]
+    fn run_exports_rotated_dimensions() {
+        let Some((device, queue)) = gpu() else {
+            eprintln!("no wgpu adapter; skipping rotation export test");
+            return;
+        };
+        let (dir, source) = temp_png(8, 6);
+        let mut edit = EditState::default();
+        edit.orientation_steps = 1;
+        let paths = run(&device, &queue, &source, &edit).expect("rotated export");
+        assert_export(&paths, 6, 8);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -462,7 +530,7 @@ mod tests {
         let rgba = [220u8, 30, 30, 255].repeat(4);
         let mut edit = EditState::default();
         edit.adjustments.hsl[0].saturation = -100.0;
-        let out = grade_pixels(&device, &queue, rgba, [2, 2], &edit).expect("grade");
+        let (out, _, _) = grade_pixels(&device, &queue, rgba, [2, 2], &edit).expect("grade");
         // Grey has R ≈ G ≈ B; the source red is far from that.
         let spread = |p: &[u8]| p.iter().take(3).max().unwrap() - p.iter().take(3).min().unwrap();
         assert!(
@@ -487,7 +555,7 @@ mod tests {
             saturation: 100.0,
             luminance: 0.0,
         };
-        let out = grade_pixels(&device, &queue, rgba, [2, 2], &edit).expect("grade");
+        let (out, _, _) = grade_pixels(&device, &queue, rgba, [2, 2], &edit).expect("grade");
         let pixel = &out[0..4];
         assert!(
             pixel[2] as i32 > pixel[0] as i32 + 5,
