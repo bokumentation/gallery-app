@@ -162,8 +162,8 @@ impl ZeroCopyConverter {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("zero-copy-pipeline-layout"),
-            bind_group_layouts: &[&layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("zero-copy-pipeline"),
@@ -213,7 +213,7 @@ impl ZeroCopyConverter {
             .map_err(|error| format!("CUDA sync: {error:?}"))?;
         let decode_time = decode_started.elapsed();
 
-        let hal_buffer = unsafe { wgpu_hal::vulkan::Device::buffer_from_raw(external.vk_buffer) };
+        let hal_buffer = unsafe { wgpu_hal::vulkan::Buffer::from_raw(external.vk_buffer) };
         let wgpu_buffer = unsafe {
             self.device
                 .create_buffer_from_hal::<wgpu_hal::api::Vulkan>(
@@ -359,11 +359,13 @@ impl ZeroCopyConverter {
     }
 
     fn create_buffer(&self, size: u64) -> Result<ExternalBuffer, String> {
-        let device = self.device.clone();
         let vulkan = &self.vulkan;
-        let result = unsafe {
-            device.as_hal::<wgpu_hal::api::Vulkan, _, _>(|hal| {
-            let hal = hal?;
+        let hal_device = match unsafe { self.device.as_hal::<wgpu_hal::api::Vulkan>() } {
+            Some(hal_device) => hal_device,
+            None => return Err("wgpu device is not backed by Vulkan".to_owned()),
+        };
+        unsafe {
+            let hal = hal_device;
             let raw = hal.raw_device();
             let physical = hal.raw_physical_device();
             let queue_family = hal.queue_family_index();
@@ -386,7 +388,7 @@ impl ZeroCopyConverter {
                 let buffer = match raw.create_buffer(&info, None) {
                     Ok(buffer) => buffer,
                     Err(error) => {
-                        return Some(Err(format!("vkCreateBuffer: {error:?}")));
+                        return Err(format!("vkCreateBuffer: {error:?}")); 
                     }
                 };
                 let requirements = raw.get_buffer_memory_requirements(buffer);
@@ -398,7 +400,7 @@ impl ZeroCopyConverter {
                 });
                 let Some(memory_type) = memory_type else {
                     raw.destroy_buffer(buffer, None);
-                    return Some(Err("no device-local memory type".to_owned()));
+                    return Err("no device-local memory type".to_owned());
                 };
                 let mut export = ash::vk::ExportMemoryAllocateInfo::default()
                     .handle_types(ash::vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD);
@@ -410,20 +412,20 @@ impl ZeroCopyConverter {
                     Ok(memory) => memory,
                     Err(error) => {
                         raw.destroy_buffer(buffer, None);
-                        return Some(Err(format!("vkAllocateMemory: {error:?}")));
+                        return Err(format!("vkAllocateMemory: {error:?}")); 
                     }
                 };
                 if let Err(error) = raw.bind_buffer_memory(buffer, memory, 0) {
                     raw.free_memory(memory, None);
                     raw.destroy_buffer(buffer, None);
-                    return Some(Err(format!("vkBindBufferMemory: {error:?}")));
+                    return Err(format!("vkBindBufferMemory: {error:?}")); 
                 }
                 let get_fd = match vulkan.memory_fd(raw.handle()) {
                     Ok(get_fd) => get_fd,
                     Err(error) => {
                         raw.free_memory(memory, None);
                         raw.destroy_buffer(buffer, None);
-                        return Some(Err(error));
+                        return Err(error);
                     }
                 };
                 let free_memory = match vulkan.free_memory(raw.handle()) {
@@ -431,7 +433,7 @@ impl ZeroCopyConverter {
                     Err(error) => {
                         raw.free_memory(memory, None);
                         raw.destroy_buffer(buffer, None);
-                        return Some(Err(error));
+                        return Err(error);
                     }
                 };
                 let mut fd = -1;
@@ -441,24 +443,17 @@ impl ZeroCopyConverter {
                 if get_fd(raw.handle(), &fd_info, &mut fd) != ash::vk::Result::SUCCESS {
                     raw.free_memory(memory, None);
                     raw.destroy_buffer(buffer, None);
-                    return Some(Err("vkGetMemoryFdKHR failed".to_owned()));
+                    return Err("vkGetMemoryFdKHR failed".to_owned());
                 }
-                Some(Ok(ExternalBuffer {
+                Ok(ExternalBuffer {
                     vk_buffer: buffer,
                     vk_memory: memory,
                     vk_device: raw.handle(),
                     memory_size: requirements.size,
                     fd,
                     free_memory,
-                }))
+                })
             }
-            })
-        };
-
-        match result {
-            Some(Ok(buffer)) => Ok(buffer),
-            Some(Err(error)) => Err(error),
-            None => Err("wgpu device is not backed by Vulkan".to_owned()),
         }
     }
 }
@@ -547,8 +542,8 @@ impl Downsampler {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("downsample-pipeline-layout"),
-            bind_group_layouts: &[&layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("downsample-pipeline"),

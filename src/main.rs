@@ -19,7 +19,7 @@ fn main() -> eframe::Result<()> {
     )
     .init();
 
-    let mut setup = egui_wgpu::WgpuSetupCreateNew::default();
+    let mut setup = egui_wgpu::WgpuSetupCreateNew::without_display_handle();
     setup.instance_descriptor.backends = wgpu::Backends::VULKAN | wgpu::Backends::GL;
     setup.power_preference = wgpu::PowerPreference::HighPerformance;
     setup.native_adapter_selector = Some(Arc::new(|adapters, _surface| {
@@ -58,7 +58,7 @@ fn main() -> eframe::Result<()> {
     }));
 
     let wgpu_options = egui_wgpu::WgpuConfiguration {
-        present_mode: wgpu::PresentMode::AutoVsync,
+        surface: egui_wgpu::SurfaceConfig::LOW_LATENCY,
         wgpu_setup: egui_wgpu::WgpuSetup::CreateNew(setup),
         ..Default::default()
     };

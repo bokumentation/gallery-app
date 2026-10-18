@@ -196,7 +196,7 @@ mod tests {
                         "{:.1} {:.1} {:.1}\n",
                         red as f32 * 0.4,
                         green as f32 * 0.4,
-                        1.0 - red as f32 * 0.5
+                        1.0 - blue as f32 * 0.5
                     ));
                 }
             }

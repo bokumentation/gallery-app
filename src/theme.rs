@@ -211,22 +211,21 @@ pub fn apply(ctx: &egui::Context, palette: Palette) {
     visuals.widgets.open.fg_stroke = Stroke::new(1.0, palette.text);
     visuals.widgets.open.corner_radius = CornerRadius::same(8);
 
-    let mut style = (*ctx.style()).clone();
-    style.visuals = visuals;
-    style.animation_time = 0.12;
-    style.spacing.item_spacing = egui::vec2(8.0, 8.0);
-    style.spacing.button_padding = egui::vec2(10.0, 6.0);
-    style.spacing.menu_margin = Margin::same(8);
-    style.spacing.indent = 16.0;
-    style.spacing.interact_size = egui::vec2(32.0, 30.0);
-    style.text_styles = [
-        (TextStyle::Heading, bold_font(19.0)),
-        (TextStyle::Body, FontId::proportional(14.0)),
-        (TextStyle::Button, FontId::proportional(14.0)),
-        (TextStyle::Small, FontId::proportional(12.0)),
-        (TextStyle::Monospace, FontId::monospace(13.0)),
-    ]
-    .into();
-
-    ctx.set_style(style);
+    ctx.all_styles_mut(|style| {
+        style.visuals = visuals.clone();
+        style.animation_time = 0.12;
+        style.spacing.item_spacing = egui::vec2(8.0, 8.0);
+        style.spacing.button_padding = egui::vec2(10.0, 6.0);
+        style.spacing.menu_margin = Margin::same(8);
+        style.spacing.indent = 16.0;
+        style.spacing.interact_size = egui::vec2(32.0, 30.0);
+        style.text_styles = [
+            (TextStyle::Heading, bold_font(19.0)),
+            (TextStyle::Body, FontId::proportional(14.0)),
+            (TextStyle::Button, FontId::proportional(14.0)),
+            (TextStyle::Small, FontId::proportional(12.0)),
+            (TextStyle::Monospace, FontId::monospace(13.0)),
+        ]
+        .into();
+    });
 }

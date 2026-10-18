@@ -6,17 +6,17 @@ rust-version = "1.85"
 resolver = "3"
 
 [dependencies]
-eframe = { version = "0.32.3", default-features = false, features = [
+eframe = { version = "0.37.0", default-features = false, features = [
     "wgpu",
     "default_fonts",
     "x11",
     "wayland",
     "accesskit",
 ] }
-egui = "0.32.3"
-egui-wgpu = "0.32.3"
-wgpu = "25.0.2"
-image = { version = "=0.25.9", default-features = false, features = [
+egui = "0.37.0"
+egui-wgpu = "0.37.0"
+wgpu = "30.0.1"
+image = { version = "=0.25.10", default-features = false, features = [
     "jpeg",
     "png",
     "webp",
@@ -33,7 +33,7 @@ log = "0.4"
 env_logger = "0.11"
 cudarc = { version = "0.17.5", default-features = false, features = ["driver", "runtime", "dynamic-loading", "cuda-13000"] }
 libloading = "0.8.9"
-wgpu-hal = { version = "25.0.2", features = ["vulkan"] }
+wgpu-hal = { version = "30.0.1", features = ["vulkan"] }
 ash = "0.38"
 
 [profile.dev]

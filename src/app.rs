@@ -462,7 +462,7 @@ impl GalleryApp {
             if self.viewer_open {
                 self.close_viewer();
             }
-            ctx.memory_mut(|memory| memory.request_focus(Id::new(w::SEARCH_ID)));
+            ctx.memory_mut(|memory| memory.request_focus(Id::unique(w::SEARCH_ID)));
             return;
         }
 
@@ -480,12 +480,12 @@ impl GalleryApp {
                     self.search.clear();
                     self.sync_filters();
                 }
-                ctx.memory_mut(|memory| memory.surrender_focus(Id::new(w::SEARCH_ID)));
+                ctx.memory_mut(|memory| memory.surrender_focus(Id::unique(w::SEARCH_ID)));
             }
             return;
         }
 
-        if ctx.wants_keyboard_input() {
+        if ctx.egui_wants_keyboard_input() {
             return;
         }
 
@@ -551,16 +551,16 @@ impl GalleryApp {
         }
     }
 
-    fn top_bar(&mut self, ctx: &egui::Context) {
+    fn top_bar(&mut self, ui: &mut egui::Ui) {
         let palette = self.palette;
-        egui::TopBottomPanel::top("top_bar")
-            .exact_height(52.0)
+        egui::Panel::top("top_bar")
+            .exact_size(52.0)
             .frame(
                 Frame::new()
                     .fill(palette.header)
                     .inner_margin(Margin::symmetric(10, 8)),
             )
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     if w::symbol_button(ui, "☰", palette)
                         .on_hover_text("Toggle sidebar")
@@ -607,31 +607,31 @@ impl GalleryApp {
                         {
                             self.theme_mode = self.theme_mode.next();
                             self.palette = Palette::from_mode(self.theme_mode);
-                            theme::apply(ctx, self.palette);
+                            theme::apply(ui.ctx(), self.palette);
                         }
                         ui.add_space(4.0);
                     });
                 });
             });
 
-        egui::TopBottomPanel::top("header_separator")
-            .exact_height(1.0)
+        egui::Panel::top("header_separator")
+            .exact_size(1.0)
             .frame(Frame::new().fill(palette.border))
-            .show(ctx, |_| {});
+            .show(ui, |_| {});
     }
 
-    fn sidebar(&mut self, ctx: &egui::Context) {
+    fn sidebar(&mut self, ui: &mut egui::Ui) {
         let palette = self.palette;
-        egui::SidePanel::left("sidebar")
+        egui::Panel::left("sidebar")
             .resizable(true)
-            .default_width(252.0)
-            .width_range(190.0..=390.0)
+            .default_size(252.0)
+            .size_range(190.0..=390.0)
             .frame(
                 Frame::new()
                     .fill(palette.sidebar)
                     .inner_margin(Margin::symmetric(8, 10)),
             )
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 w::small_caps(ui, "Places", palette);
                 ui.add_space(4.0);
 
@@ -679,11 +679,11 @@ impl GalleryApp {
             });
     }
 
-    fn central(&mut self, ctx: &egui::Context) {
+    fn central(&mut self, ui: &mut egui::Ui) {
         let palette = self.palette;
         egui::CentralPanel::default()
             .frame(Frame::new().fill(palette.bg).inner_margin(Margin::same(0)))
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 if !self.viewer_open {
                     Frame::new()
                         .inner_margin(Margin::symmetric(18, 12))
@@ -902,7 +902,7 @@ impl GalleryApp {
                             Rect::from_min_size(egui::pos2(left, top), Vec2::splat(cell_width));
                         let response = ui.interact(
                             cell_rect,
-                            Id::new(("thumb", index, &path)),
+                            Id::unique(("thumb", index, &path)),
                             Sense::click(),
                         );
 
@@ -1188,7 +1188,7 @@ impl GalleryApp {
                 .raw
                 .dropped_files
                 .iter()
-                .filter_map(|file| file.path.clone())
+                .map(|file| file.path().to_owned())
                 .collect()
         });
         for path in dropped {
@@ -1221,7 +1221,7 @@ impl GalleryApp {
         } else {
             palette.sidebar
         };
-        egui::Area::new(Id::new("toast"))
+        egui::Area::new(Id::unique("toast"))
             .anchor(Align2::LEFT_BOTTOM, Vec2::new(18.0, -18.0))
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
@@ -1252,23 +1252,24 @@ impl GalleryApp {
 }
 
 impl eframe::App for GalleryApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.handle_dropped_files(ctx);
-        self.thumbs.poll(ctx);
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        self.handle_dropped_files(&ctx);
+        self.thumbs.poll(&ctx);
         self.viewer.poll();
         self.poll_scan();
-        self.handle_keys(ctx);
+        self.handle_keys(&ctx);
 
-        self.top_bar(ctx);
+        self.top_bar(ui);
         if self.show_sidebar {
-            self.sidebar(ctx);
+            self.sidebar(ui);
         }
         if self.viewer_open && self.edit_panel_open {
-            crate::ui::edit_panel::show(self, ctx);
+            crate::ui::edit_panel::show(self, ui);
         }
-        self.central(ctx);
+        self.central(ui);
         self.sync_filters();
-        self.toast(ctx);
+        self.toast(&ctx);
 
         if self.scanning || self.viewer.loading || self.thumbs.busy() {
             ctx.request_repaint_after(Duration::from_millis(60));
@@ -1343,7 +1344,7 @@ fn tree_node_ui(
     );
     let chevron = ui.interact(
         chevron_rect,
-        Id::new(("tree-chevron", &node.path)),
+        Id::unique(("tree-chevron", &node.path)),
         Sense::click(),
     );
 

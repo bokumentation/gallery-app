@@ -175,11 +175,11 @@ pub fn search_field(ui: &mut Ui, text: &mut String, width: f32, palette: Palette
     let response = ui.put(
         text_rect,
         TextEdit::singleline(text)
-            .id(Id::new(SEARCH_ID))
-            .frame(false)
+            .id(Id::unique(SEARCH_ID))
+            .frame(Frame::NONE)
             .hint_text(RichText::new("Search images").color(palette.dim))
             .desired_width(text_rect.width())
-            .margin(Vec2::new(0.0, 3.0)),
+            .margin(egui::vec2(0.0, 3.0)),
     );
     changed |= response.changed();
 
@@ -188,7 +188,7 @@ pub fn search_field(ui: &mut Ui, text: &mut String, width: f32, palette: Palette
             egui::pos2(rect.right() - 17.0, rect.center().y),
             Vec2::splat(20.0),
         );
-        let response = ui.interact(clear_rect, Id::new("search-clear"), Sense::click());
+        let response = ui.interact(clear_rect, Id::unique("search-clear"), Sense::click());
         if response.hovered() {
             ui.painter().circle_filled(
                 clear_rect.center(),

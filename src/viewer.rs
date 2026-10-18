@@ -122,7 +122,10 @@ pub struct CachedImage {
 impl Drop for CachedImage {
     fn drop(&mut self) {
         if self._zero_copy.is_some() {
-            let _ = self.render_state.device.poll(wgpu::PollType::Wait);
+            let _ = self.render_state.device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            });
         }
         self.render_state.renderer.write().free_texture(&self.id);
     }

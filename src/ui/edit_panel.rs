@@ -10,19 +10,19 @@ use crate::crop::{CropDrag, CropGeom};
 use crate::grade::EditState;
 use crate::theme;
 use crate::ui::widgets as w;
-use egui::{CollapsingHeader, Context, Color32, Frame, Margin, Rect, RichText, Ui};
+use egui::{CollapsingHeader, Color32, Frame, Margin, Rect, RichText, Ui};
 
-pub fn show(app: &mut GalleryApp, ctx: &Context) {
+pub fn show(app: &mut GalleryApp, ui: &mut Ui) {
     let palette = app.palette;
-    egui::SidePanel::right("edit_panel")
+    egui::Panel::right("edit_panel")
         .resizable(false)
-        .exact_width(300.0)
+        .exact_size(300.0)
         .frame(
             Frame::new()
                 .fill(palette.sidebar)
                 .inner_margin(Margin::symmetric(8, 10)),
         )
-        .show(ctx, |ui| {
+        .show(ui, |ui| {
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| panel_content(app, ui));
