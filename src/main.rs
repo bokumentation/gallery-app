@@ -69,7 +69,7 @@ fn main() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1400.0, 900.0])
             .with_min_inner_size([880.0, 560.0])
-            .with_title("Gallery")
+            .with_title(app::APP_NAME)
             .with_app_id("gallery-app")
             // Custom GNOME-style header bar and rounded shell. The window
             // surface is transparent so the corners outside the rounded
@@ -93,7 +93,7 @@ fn main() -> eframe::Result<()> {
         .or_else(dirs::home_dir);
 
     eframe::run_native(
-        "Gallery",
+        app::APP_NAME,
         options,
         Box::new(move |cc| Ok(Box::new(app::GalleryApp::new(cc, start_dir)))),
     )

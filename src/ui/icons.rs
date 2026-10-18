@@ -10,6 +10,7 @@ use egui::{Color32, Rect, Stroke, StrokeKind, Ui};
 #[allow(dead_code)] // Check/Sun/Moon and zoom icons are used by upcoming UI
 pub enum Icon {
     Menu,
+    PanelLeft,
     RefreshCw,
     RotateLeft,
     RotateRight,
@@ -68,6 +69,15 @@ const MENU: &[StrokeDef] = &[
     StrokeDef::Line([4.0, 6.0], [20.0, 6.0]),
     StrokeDef::Line([4.0, 12.0], [20.0, 12.0]),
     StrokeDef::Line([4.0, 18.0], [20.0, 18.0]),
+];
+
+const PANEL_LEFT: &[StrokeDef] = &[
+    StrokeDef::Rect {
+        xy: [3.0, 3.0],
+        wh: [18.0, 18.0],
+        rx: 2.0,
+    },
+    StrokeDef::Line([9.0, 3.0], [9.0, 21.0]),
 ];
 
 const REFRESH_CW: &[StrokeDef] = &[
@@ -345,6 +355,7 @@ const SEARCH: &[StrokeDef] = &[
 pub fn icon_def(icon: Icon) -> &'static [StrokeDef] {
     match icon {
         Icon::Menu => MENU,
+        Icon::PanelLeft => PANEL_LEFT,
         Icon::RefreshCw => REFRESH_CW,
         Icon::RotateLeft => ROTATE_LEFT,
         Icon::RotateRight => ROTATE_RIGHT,

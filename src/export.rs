@@ -28,6 +28,18 @@ pub struct ExportPaths {
     pub sidecar: PathBuf,
 }
 
+/// RGBA pixels rendered for the clipboard.
+pub struct CopyImage {
+    pub pixels: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
+
+pub struct CopyOutcome {
+    pub result: Result<CopyImage, String>,
+    pub elapsed: Duration,
+}
+
 /// Run one export on a worker thread. The returned receiver yields exactly one
 /// outcome.
 pub fn spawn(
@@ -51,26 +63,43 @@ pub fn spawn(
     rx
 }
 
+/// Render one image on a worker thread for the clipboard. The result is the
+/// same full-resolution, edited RGBA bitmap used by export.
+pub fn spawn_copy(
+    device: Device,
+    queue: Queue,
+    path: PathBuf,
+    edit: EditState,
+) -> Receiver<CopyOutcome> {
+    let (tx, rx) = unbounded();
+    std::thread::Builder::new()
+        .name("copy-image".to_owned())
+        .spawn(move || {
+            let started = Instant::now();
+            let result =
+                render_rgba(&device, &queue, &path, &edit).map(|(pixels, width, height)| {
+                    CopyImage {
+                        pixels,
+                        width,
+                        height,
+                    }
+                });
+            let _ = tx.send(CopyOutcome {
+                result,
+                elapsed: started.elapsed(),
+            });
+        })
+        .expect("spawn copy worker");
+    rx
+}
+
 fn run(
     device: &Device,
     queue: &Queue,
     path: &Path,
     edit: &EditState,
 ) -> Result<ExportPaths, String> {
-    let decoded = decode_image(path)?;
-    let rgba = decoded.to_rgba8();
-    let (width, height) = rgba.dimensions();
-    if width == 0 || height == 0 {
-        return Err("image has no pixels".to_owned());
-    }
-    let source_size = [width, height];
-
-    let (pixels, out_width, out_height) = if edit.is_identity() {
-        (rgba.into_raw(), width, height)
-    } else {
-        grade_pixels(device, queue, rgba.into_raw(), source_size, edit)?
-    };
-
+    let (pixels, out_width, out_height) = render_rgba(device, queue, path, edit)?;
     let (image_path, sidecar_path) = output_paths(path);
     // JPEG has no alpha channel; drop it.
     let rgb: Vec<u8> = pixels
@@ -93,6 +122,30 @@ fn run(
         image: image_path,
         sidecar: sidecar_path,
     })
+}
+
+/// Decode the source and run the edit pipeline at full resolution. Returns the
+/// RGBA pixels plus the output dimensions (which differ from the source after a
+/// crop or 90/270 rotation).
+fn render_rgba(
+    device: &Device,
+    queue: &Queue,
+    path: &Path,
+    edit: &EditState,
+) -> Result<(Vec<u8>, u32, u32), String> {
+    let decoded = decode_image(path)?;
+    let rgba = decoded.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    if width == 0 || height == 0 {
+        return Err("image has no pixels".to_owned());
+    }
+    let source_size = [width, height];
+
+    if edit.is_identity() {
+        Ok((rgba.into_raw(), width, height))
+    } else {
+        grade_pixels(device, queue, rgba.into_raw(), source_size, edit)
+    }
 }
 
 /// Upload the full-resolution pixels, dispatch the shared grade compute pass,
@@ -487,6 +540,44 @@ mod tests {
         let decoded = image::open(&paths.image).unwrap();
         assert_eq!((decoded.width(), decoded.height()), (width, height));
         assert!(paths.sidecar.exists(), "sidecar written");
+    }
+
+    /// Clipboard copies use the same full-resolution renderer as export. With
+    /// no edits the decoded RGBA pixels must pass through untouched.
+    #[test]
+    fn render_rgba_identity_preserves_source() {
+        let Some((device, queue)) = gpu() else {
+            eprintln!("no wgpu adapter; skipping copy render test");
+            return;
+        };
+        let (dir, source) = temp_png(3, 2);
+        let (pixels, width, height) =
+            render_rgba(&device, &queue, &source, &EditState::default()).expect("copy render");
+        assert_eq!((width, height), (3, 2));
+        assert_eq!(pixels.len(), 3 * 2 * 4);
+        let decoded = image::open(&source).unwrap().to_rgba8();
+        assert_eq!(pixels, decoded.into_raw());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The clipboard worker returns the same RGBA frame without writing files.
+    #[test]
+    fn spawn_copy_returns_full_resolution_rgba() {
+        let Some((device, queue)) = gpu() else {
+            eprintln!("no wgpu adapter; skipping clipboard worker test");
+            return;
+        };
+        let (dir, source) = temp_png(5, 4);
+        let rx = spawn_copy(device, queue, source.clone(), EditState::default());
+        let outcome = rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("copy worker response");
+        let image = outcome.result.expect("copy render");
+        assert_eq!((image.width, image.height), (5, 4));
+        assert_eq!(image.pixels.len(), 5 * 4 * 4);
+        let decoded = image::open(&source).unwrap().to_rgba8();
+        assert_eq!(image.pixels, decoded.into_raw());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Full export path on a synthetic PNG: decode, grade, JPEG + sidecar.

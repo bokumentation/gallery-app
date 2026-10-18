@@ -194,6 +194,11 @@ pub fn apply(ctx: &egui::Context, palette: Palette) {
         ]
         .into();
     });
+
+    // egui defaults to 40 px per wheel line, which feels much slower than
+    // Chrome/GTK (~100 px). Grid scrolling also bypasses wheel smoothing via
+    // `widgets::adaptive_scroll`, so this is the effective per-notch distance.
+    ctx.options_mut(|options| options.input_options.line_scroll_speed = 100.0);
 }
 
 /// Paint scrollbar handles with the muted scroll color for the duration of one

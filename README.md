@@ -25,15 +25,18 @@ Browse:
 
 Edit (VS Code / Zed-style compact workspace):
 
-- Custom GNOME-style header bar: app mark and document title, draggable title
-  area, and minimize / maximize / close controls on the right. The window uses
-  a rounded shell with transparent corners, and edge drag handles for resizing
+- Custom GNOME-style header bar: app mark and app name, draggable title area,
+  and minimize / maximize / close controls on the right. The window uses a
+  rounded shell with transparent corners, and edge drag handles for resizing
 - Compact, flush panels: a full-height left library sidebar, the central
   content, and the right editor panel sit edge to edge with 1 px separators.
   Only the window shell is rounded; there are no floating cards or inset gaps
 - The 36 px toolbar keeps Open Folder, sidebar, and the right-side actions
   (Adjust / Image Info / open-in-file-manager / Export / theme / refresh).
-  Rotate, flip, crop and copy live in the viewer toolbar
+  Rotate, flip, crop and copy-image live in the viewer toolbar
+- Floating scrollbars fade in when the pointer enters a panel and expand when
+  the bar is hovered; wheel/trackpad scrolling is applied 1:1 with the input
+  instead of egui's fixed smoothing, so fast gestures scroll fast
 - Two-row library header: folder name and path above, then a wrapping control
   row with search, sort, recursive scan and the Grid size dropdown. Controls
   wrap instead of overlapping on narrow windows
@@ -130,6 +133,8 @@ context in a worker thread at app startup, so it does not block the UI.
 | --- | --- |
 | `Ctrl+O` | Open folder |
 | `Ctrl+F` | Focus search |
+| `Ctrl+B` | Toggle the file sidebar |
+| `Ctrl+C` | Copy the current edited image to the clipboard |
 | `←` `→` `↑` `↓` | Move grid selection; navigate in the viewer |
 | `Home` / `End` | First / last image |
 | `Enter` | Open the selected image |

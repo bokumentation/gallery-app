@@ -16,6 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+pub(crate) const APP_NAME: &str = "Gallery";
 const TITLE_BAR_HEIGHT: f32 = 32.0;
 const TOP_BAR_HEIGHT: f32 = 36.0;
 const MAX_ZOOM: f32 = 8.0;
@@ -68,6 +69,7 @@ pub struct GalleryApp {
     pub(crate) grade: GradePass,
     export_rx: Option<Receiver<crate::export::ExportOutcome>>,
     exporting: bool,
+    copy_rx: Option<Receiver<crate::export::CopyOutcome>>,
     reveal_rx: Option<Receiver<Result<(), String>>>,
     toast: Option<Toast>,
     pending_open: Option<PathBuf>,
@@ -214,6 +216,7 @@ impl GalleryApp {
             ),
             export_rx: None,
             exporting: false,
+            copy_rx: None,
             reveal_rx: None,
             toast: None,
             pending_open: None,
@@ -504,6 +507,13 @@ impl GalleryApp {
             return;
         }
 
+        let sidebar_shortcut =
+            ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::B));
+        if sidebar_shortcut {
+            self.show_sidebar = !self.show_sidebar;
+            return;
+        }
+
         let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
         if escape {
             if self.crop_active {
@@ -524,6 +534,11 @@ impl GalleryApp {
         }
 
         if ctx.egui_wants_keyboard_input() {
+            return;
+        }
+
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::C)) {
+            self.copy_current_image();
             return;
         }
 
@@ -648,12 +663,68 @@ impl GalleryApp {
         }
     }
 
-    fn copy_current_path(&mut self, ctx: &egui::Context) {
-        let Some(path) = self.current_viewer_path() else {
+    fn copy_target_path(&self) -> Option<PathBuf> {
+        if self.viewer_open {
+            self.current_viewer_path()
+        } else {
+            self.selection
+                .and_then(|index| self.visible.get(index))
+                .and_then(|index| self.all_items.get(*index))
+                .map(|item| item.path.clone())
+        }
+    }
+
+    /// Copy the edited image at full resolution to the system clipboard. The
+    /// decode/grade/readback runs on the export worker so egui stays responsive.
+    fn copy_current_image(&mut self) {
+        if self.copy_rx.is_some() {
+            self.show_toast("Copy already in progress…".to_owned(), false);
+            return;
+        }
+        let Some(path) = self.copy_target_path() else {
+            self.show_toast("Select an image to copy".to_owned(), false);
             return;
         };
-        ctx.copy_text(path.display().to_string());
-        self.show_toast("Image path copied".to_owned(), false);
+        let edit = self.edits.get(&path).cloned().unwrap_or_default();
+        self.copy_rx = Some(crate::export::spawn_copy(
+            self.grade.device(),
+            self.grade.queue(),
+            path,
+            edit,
+        ));
+        self.show_toast("Copying image…".to_owned(), false);
+    }
+
+    fn poll_copy(&mut self, ctx: &egui::Context) {
+        let Some(rx) = &self.copy_rx else {
+            return;
+        };
+        let Ok(outcome) = rx.try_recv() else {
+            return;
+        };
+        self.copy_rx = None;
+        match outcome.result {
+            Ok(image) => {
+                let width = image.width as usize;
+                let height = image.height as usize;
+                if image.pixels.len() != width.saturating_mul(height).saturating_mul(4) {
+                    self.show_toast("Copy failed: invalid RGBA buffer".to_owned(), true);
+                    return;
+                }
+                let color =
+                    egui::ColorImage::from_rgba_unmultiplied([width, height], &image.pixels);
+                ctx.copy_image(color);
+                log::info!(
+                    "copied {width}x{height} image in {:.0} ms",
+                    outcome.elapsed.as_secs_f64() * 1000.0
+                );
+                self.show_toast("Image copied".to_owned(), false);
+            }
+            Err(error) => {
+                log::warn!("copy failed: {error}");
+                self.show_toast(format!("Copy failed: {error}"), true);
+            }
+        }
     }
 
     /// Reveal the current image in the desktop file manager, selecting it when
@@ -766,22 +837,10 @@ impl GalleryApp {
                         .rect_filled(icon_rect, CornerRadius::same(4), palette.accent);
                     w::paint_icon(ui, w::Icon::Image, icon_rect.shrink(2.0), palette.on_accent);
 
-                    let title = if self.viewer_open {
-                        self.visible
-                            .get(self.viewer_index)
-                            .and_then(|index| self.all_items.get(self.visible[*index]))
-                            .map(|item| item.name.clone())
-                            .unwrap_or_else(|| "Gallery".to_owned())
-                    } else {
-                        self.current_dir
-                            .as_deref()
-                            .map(display_name)
-                            .unwrap_or_else(|| "Gallery".to_owned())
-                    };
                     ui.painter().with_clip_rect(drag_rect).text(
                         egui::pos2(icon_rect.right() + 8.0, drag_rect.center().y),
                         Align2::LEFT_CENTER,
-                        title,
+                        APP_NAME,
                         theme::bold_font(12.5),
                         palette.text,
                     );
@@ -925,8 +984,8 @@ impl GalleryApp {
             .frame(Frame::new().inner_margin(Margin::symmetric(8, 4)))
             .show(ui, |ui| {
                 ui.horizontal_centered(|ui| {
-                    if w::icon_button(ui, Icon::Menu, palette)
-                        .on_hover_text("Toggle sidebar")
+                    if w::icon_button(ui, Icon::PanelLeft, palette)
+                        .on_hover_text("Toggle sidebar (Ctrl+B)")
                         .clicked()
                     {
                         self.show_sidebar = !self.show_sidebar;
@@ -1001,7 +1060,7 @@ impl GalleryApp {
                 }
             }
             ActionId::Sliders => self.toggle_right_tab(RightTab::Edit),
-            ActionId::CopyPath => self.copy_current_path(ctx),
+            ActionId::CopyImage => self.copy_current_image(),
             ActionId::Info => self.toggle_right_tab(RightTab::Info),
             ActionId::Reveal => self.reveal_in_file_manager(),
             ActionId::Export => self.begin_export(),
@@ -1184,8 +1243,8 @@ impl GalleryApp {
                                 self.right_tab = RightTab::Edit;
                             }
                         }
-                        if w::status_icon_button(ui, w::Icon::Menu, self.show_sidebar, palette)
-                            .on_hover_text("Toggle sidebar")
+                        if w::status_icon_button(ui, w::Icon::PanelLeft, self.show_sidebar, palette)
+                            .on_hover_text("Toggle sidebar (Ctrl+B)")
                             .clicked()
                         {
                             self.show_sidebar = !self.show_sidebar;
@@ -1202,16 +1261,14 @@ impl GalleryApp {
                                 self.pan = Vec2::ZERO;
                                 scale = fit;
                             }
-                            ui.allocate_ui_with_layout(
-                                Vec2::new(34.0, 20.0),
-                                Layout::right_to_left(Align::Center),
-                                |ui| {
-                                    ui.label(
-                                        RichText::new(format!("{:.0}%", scale * 100.0))
-                                            .size(theme::TEXT_SMALL)
-                                            .color(palette.dim),
-                                    );
-                                },
+                            let (percent_rect, _) =
+                                ui.allocate_exact_size(Vec2::new(40.0, 20.0), Sense::hover());
+                            ui.painter().text(
+                                percent_rect.center(),
+                                Align2::CENTER_CENTER,
+                                format!("{:.0}%", scale * 100.0),
+                                FontId::proportional(theme::TEXT_SMALL),
+                                palette.dim,
                             );
                             let changed = ui
                                 .allocate_ui_with_layout(
@@ -1282,6 +1339,7 @@ impl GalleryApp {
 
                 let mut clicked = None;
                 let selected = self.selected_folder.clone();
+                w::adaptive_scroll(ui, ui.available_rect_before_wrap());
                 theme::with_scroll_handle(ui, palette, |ui| {
                     egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
@@ -1524,6 +1582,7 @@ impl GalleryApp {
         let selection = self.selection;
 
         ui.add_space(2.0);
+        w::adaptive_scroll(ui, ui.available_rect_before_wrap());
         theme::with_scroll_handle(ui, palette, |ui| {
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
@@ -1950,11 +2009,12 @@ impl GalleryApp {
         };
         egui::Area::new(Id::unique("toast"))
             .anchor(
-                Align2::LEFT_BOTTOM,
-                Vec2::new(18.0, -(palette.metrics.bottom_bar_h + 12.0)),
+                Align2::RIGHT_BOTTOM,
+                Vec2::new(-18.0, -(palette.metrics.bottom_bar_h + 12.0)),
             )
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
+                ui.set_max_width(360.0);
                 Frame::new()
                     .fill(fill)
                     .corner_radius(6)
@@ -1966,13 +2026,18 @@ impl GalleryApp {
                         color: palette.shadow,
                     })
                     .show(ui, |ui| {
-                        ui.label(RichText::new(&toast.message).size(theme::TEXT_SMALL).color(
-                            if toast.error {
-                                Color32::WHITE
-                            } else {
-                                palette.text
-                            },
-                        ));
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(&toast.message).size(theme::TEXT_SMALL).color(
+                                    if toast.error {
+                                        Color32::WHITE
+                                    } else {
+                                        palette.text
+                                    },
+                                ),
+                            )
+                            .wrap(),
+                        );
                     });
             });
         ctx.request_repaint_after(Duration::from_millis(200));
@@ -1992,6 +2057,7 @@ impl eframe::App for GalleryApp {
         self.viewer.poll();
         self.poll_scan();
         self.poll_export();
+        self.poll_copy(&ctx);
         self.poll_reveal();
         self.handle_keys(&ctx);
 
@@ -2015,6 +2081,7 @@ impl eframe::App for GalleryApp {
             || self.viewer.loading
             || self.thumbs.busy()
             || self.exporting
+            || self.copy_rx.is_some()
             || self.reveal_rx.is_some()
         {
             ctx.request_repaint_after(Duration::from_millis(60));
