@@ -17,6 +17,8 @@ pub struct CropRect {
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct EditState {
     pub crop: Option<CropRect>,
+    /// Enforced aspect ratio (width / height) while the crop mode is active.
+    pub aspect: Option<f32>,
     /// Free rotation in degrees, -45..=45.
     pub rotation: f32,
     /// User 90-degree steps, 0..=3 (clockwise).

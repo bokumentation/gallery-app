@@ -42,9 +42,11 @@ pub struct GalleryApp {
     scan_rx: Option<Receiver<ScanOutcome>>,
     scanning: bool,
     scan_elapsed: Option<Duration>,
-    thumbs: ThumbnailStore,
+    pub(crate) thumbs: ThumbnailStore,
     pub(crate) viewer: ViewerService,
     pub(crate) edit_panel_open: bool,
+    pub(crate) crop_active: bool,
+    pub(crate) crop_drag: Option<crate::crop::CropDrag>,
     pub(crate) edits: HashMap<PathBuf, EditState>,
     pub(crate) grade: GradePass,
     toast: Option<Toast>,
@@ -166,6 +168,8 @@ impl GalleryApp {
                     .expect("wgpu render state is available with the wgpu renderer"),
             ),
             edit_panel_open: false,
+            crop_active: false,
+            crop_drag: None,
             edits: HashMap::new(),
             grade: GradePass::new(
                 cc.wgpu_render_state
@@ -410,7 +414,10 @@ impl GalleryApp {
 
         let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
         if escape {
-            if self.edit_panel_open {
+            if self.crop_active {
+                self.crop_active = false;
+                self.crop_drag = None;
+            } else if self.edit_panel_open {
                 self.toggle_edit_panel();
             } else if self.viewer_open {
                 self.close_viewer();
@@ -484,6 +491,8 @@ impl GalleryApp {
     fn toggle_edit_panel(&mut self) {
         self.edit_panel_open = !self.edit_panel_open;
         if !self.edit_panel_open {
+            self.crop_active = false;
+            self.crop_drag = None;
             self.grade.release();
         }
     }
@@ -1061,6 +1070,12 @@ impl GalleryApp {
                         .rect_filled(rect.expand(2.0), CornerRadius::same(4), palette.shadow);
                 }
                 draw_texture(ui, crate_texture_id, rect, Color32::WHITE);
+                if self.edit_panel_open && self.crop_active {
+                    if let Some(dimensions) = dimensions {
+                        let source = [dimensions[0] as f32, dimensions[1] as f32];
+                        crate::ui::edit_panel::crop_overlay(self, ui, rect, source);
+                    }
+                }
             }
         } else if let Some(error) = &self.viewer.error {
             ui.allocate_ui_with_layout(
