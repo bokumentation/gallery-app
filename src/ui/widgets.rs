@@ -90,46 +90,6 @@ pub fn symbol_button(ui: &mut Ui, glyph: &str, palette: Palette) -> Response {
     response
 }
 
-pub fn segmented<T: Copy + PartialEq>(
-    ui: &mut Ui,
-    options: &[(T, &str)],
-    value: &mut T,
-    palette: Palette,
-) -> bool {
-    let m = palette.metrics;
-    let mut changed = false;
-    Frame::new()
-        .fill(palette.card)
-        .corner_radius(m.radius_md)
-        .inner_margin(Margin::same(2))
-        .show(ui, |ui| {
-            ui.spacing_mut().item_spacing.x = 2.0;
-            for (option, label) in options {
-                let selected = *value == *option;
-                let response = ui.add(
-                    Button::new(
-                        RichText::new(*label)
-                            .size(12.0)
-                            .color(if selected { palette.text } else { palette.dim }),
-                    )
-                    .fill(if selected {
-                        palette.card_hover
-                    } else {
-                        Color32::TRANSPARENT
-                    })
-                    .stroke(Stroke::NONE)
-                    .corner_radius(m.radius_sm)
-                    .min_size(Vec2::new(27.0, m.control_h_sm - 8.0)),
-                );
-                if response.clicked() && !selected {
-                    *value = *option;
-                    changed = true;
-                }
-            }
-        });
-    changed
-}
-
 pub fn switch(ui: &mut Ui, on: &mut bool, palette: Palette) -> Response {
     let m = palette.metrics;
     let desired = Vec2::new(m.switch_w, m.switch_h);

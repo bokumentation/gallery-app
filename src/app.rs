@@ -1047,7 +1047,7 @@ impl GalleryApp {
             ui.horizontal(|ui| {
                 self.header_sort(ui, palette);
                 ui.add_space(6.0);
-                self.header_size(ui, palette);
+                self.header_size(ui);
                 ui.add_space(6.0);
                 self.header_recursive(ui, palette);
             });
@@ -1061,7 +1061,7 @@ impl GalleryApp {
                     }
 
                     ui.add_space(6.0);
-                    self.header_size(ui, palette);
+                    self.header_size(ui);
 
                     ui.add_space(6.0);
                     self.header_recursive(ui, palette);
@@ -1146,18 +1146,19 @@ impl GalleryApp {
         }
     }
 
-    fn header_size(&mut self, ui: &mut Ui, palette: Palette) {
+    fn header_size(&mut self, ui: &mut Ui) {
+        // A fixed-width dropdown keeps the header footprint stable and avoids
+        // the S/M/L chip row colliding with the search field.
         let mut thumb_size = self.thumb_size;
-        if w::segmented(
-            ui,
-            &[
-                (ThumbSize::Small, "S"),
-                (ThumbSize::Medium, "M"),
-                (ThumbSize::Large, "L"),
-            ],
-            &mut thumb_size,
-            palette,
-        ) {
+        egui::ComboBox::from_id_salt("thumb-size")
+            .selected_text(format!("Grid: {}", thumb_size.label()))
+            .width(112.0)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut thumb_size, ThumbSize::Small, "Small");
+                ui.selectable_value(&mut thumb_size, ThumbSize::Medium, "Medium");
+                ui.selectable_value(&mut thumb_size, ThumbSize::Large, "Large");
+            });
+        if thumb_size != self.thumb_size {
             self.thumb_size = thumb_size;
         }
     }

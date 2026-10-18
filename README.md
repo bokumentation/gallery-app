@@ -11,7 +11,7 @@ Browse:
 - Folder tree in the sidebar with lazy expansion, plus Home / Pictures / Downloads / Desktop shortcuts
 - Non-recursive and recursive folder scanning
 - Virtualized thumbnail grid: only visible rows are decoded and drawn
-- Thumbnail sizes S / M / L, name / date / size sorting, and filename search
+- Thumbnail size dropdown (Small / Medium / Large), name / date / size sorting, and filename search
 - Double-click or Enter opens an image in the main-area viewer
 - `←` / `→` navigate images, `Esc` returns to the grid
 - Instant thumbnail preview while the full-resolution image is still decoding

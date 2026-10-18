@@ -83,4 +83,12 @@ impl ThumbSize {
             Self::Large => 310.0,
         }
     }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Small => "Small",
+            Self::Medium => "Medium",
+            Self::Large => "Large",
+        }
+    }
 }
