@@ -3,6 +3,7 @@ mod crop;
 mod grade;
 mod model;
 mod nvjpeg;
+mod luts;
 mod scan;
 mod theme;
 mod thumbs;

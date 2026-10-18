@@ -15,16 +15,17 @@ use egui::{CollapsingHeader, Context, Color32, Frame, Margin, Rect, RichText, Ui
 pub fn show(app: &mut GalleryApp, ctx: &Context) {
     let palette = app.palette;
     egui::SidePanel::right("edit_panel")
-        .resizable(true)
-        .default_width(300.0)
-        .width_range(240.0..=440.0)
+        .resizable(false)
+        .exact_width(300.0)
         .frame(
             Frame::new()
                 .fill(palette.sidebar)
                 .inner_margin(Margin::symmetric(8, 10)),
         )
         .show(ctx, |ui| {
-            panel_content(app, ui);
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| panel_content(app, ui));
         });
 }
 
@@ -44,6 +45,7 @@ fn panel_content(app: &mut GalleryApp, ui: &mut Ui) {
     // Seed the per-image edit entry so values survive the viewer.
     app.edits.entry(path.clone()).or_default();
 
+    lut_section(app, &path, ui);
     light_section(app, &path, ui);
     color_section(app, &path, ui);
     crop_section(app, &path, ui);
@@ -56,6 +58,62 @@ fn panel_content(app: &mut GalleryApp, ui: &mut Ui) {
     if w::accent_button(ui, "Reset all", palette).clicked() {
         *app.edits.entry(path.clone()).or_default() = EditState::default();
     }
+}
+
+/// The LUT section sits at the top of the panel hierarchy: it is the most
+/// global adjustment and applies before the per-slider color work.
+fn lut_section(app: &mut GalleryApp, path: &std::path::PathBuf, ui: &mut Ui) {
+    let palette = app.palette;
+    CollapsingHeader::new(RichText::new("LUT").size(12.5))
+        .default_open(false)
+        .show(ui, |ui| {
+            let state = app.edits.entry(path.clone()).or_default().clone();
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Lookup table").size(11.5).color(palette.dim));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if w::flat_button(ui, "Import…", palette)
+                        .on_hover_text("Import a .cube LUT file and keep it installed")
+                        .clicked()
+                    {
+                        app.import_lut();
+                    }
+                });
+            });
+
+            // Attached-LUT picker over the persisted store.
+            let mut selected = state.lut.clone().unwrap_or_else(|| "(none)".to_owned());
+            egui::ComboBox::from_id_salt("lut-picker")
+                .width(ui.available_width() - 8.0)
+                .selected_text(RichText::new(&selected).size(11.5))
+                .show_ui(ui, |ui| {
+                    let none = ui
+                        .selectable_label(selected == "(none)", RichText::new("(none)").size(11.5))
+                        .clicked();
+                    if none {
+                        selected = "(none)".to_owned();
+                    }
+                    for name in &app.lut_names {
+                        if ui
+                            .selectable_label(selected == *name, RichText::new(name).size(11.5))
+                            .clicked()
+                        {
+                            selected = name.clone();
+                        }
+                    }
+                });
+            let attached = (selected != "(none)").then(|| selected.clone());
+            if attached != state.lut {
+                let state = app.edits.get_mut(path).unwrap();
+                state.lut = attached;
+            }
+            ui.add_space(2.0);
+            ui.label(
+                RichText::new("3D .cube files; imported LUTs stay installed.")
+                    .size(10.5)
+                    .color(palette.dim),
+            );
+        });
 }
 
 /// The crop tool: mode switch, 90-degree steps, flips, aspect presets and the
@@ -224,9 +282,9 @@ pub fn crop_overlay(app: &mut GalleryApp, ui: &mut Ui, rect: Rect, source: [f32;
     };
     let mut crop = state.crop.unwrap_or_else(|| geometry.centered(None));
 
-    // The drawn texture displays `crop` dimensions (or the oriented frame);
+    // The drawn texture is the full oriented frame (crop preview mode), so
     // the same scale applies on both axes because the fit preserves aspect.
-    let display_w = state.display_size([oriented[0], oriented[1]])[0] as f32;
+    let display_w = oriented[0] as f32;
     let scale = rect.width() / display_w.max(1.0);
 
     let ui_crop = Rect::from_min_size(
@@ -324,13 +382,14 @@ pub fn crop_overlay(app: &mut GalleryApp, ui: &mut Ui, rect: Rect, source: [f32;
 
     if let Some(pending) = &mut drag {
         if let Some(pointer) = pointer {
+            // Cumulative delta from drag start: apply() re-derives the whole
+            // rect from start_rect, so the pointer must stay fixed.
             let start = screen_to_source(pointer, rect, scale);
             let delta = [
                 start[0] - pending.start_pointer[0],
                 start[1] - pending.start_pointer[1],
             ];
             crop = geometry.fit(pending.apply(delta));
-            pending.start_pointer = start;
         }
     }
     if response.drag_stopped() {

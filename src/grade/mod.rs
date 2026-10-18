@@ -27,6 +27,8 @@ pub struct EditState {
     pub flip_h: bool,
     pub flip_v: bool,
     pub adjustments: Adjustments,
+    /// Attached LUT name from the persisted store (`.cube` file stem).
+    pub lut: Option<String>,
 }
 
 impl EditState {
@@ -69,9 +71,9 @@ impl EditState {
             && self.orientation_steps == 0
             && !self.flip_h
             && !self.flip_v
+            && self.lut.is_none()
             && self.adjustments.is_identity()
-    }
-}
+    }}
 
 /// HSL color-mixer hue centres: red, orange, yellow, green, aqua, blue,
 /// purple, magenta (used by the mixer UI in a later phase).

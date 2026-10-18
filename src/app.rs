@@ -47,6 +47,7 @@ pub struct GalleryApp {
     pub(crate) edit_panel_open: bool,
     pub(crate) crop_active: bool,
     pub(crate) crop_drag: Option<crate::crop::CropDrag>,
+    pub(crate) lut_names: Vec<String>,
     pub(crate) edits: HashMap<PathBuf, EditState>,
     pub(crate) grade: GradePass,
     toast: Option<Toast>,
@@ -178,6 +179,7 @@ impl GalleryApp {
             edit_panel_open: false,
             crop_active: false,
             crop_drag: None,
+            lut_names: Vec::new(),
             edits: HashMap::new(),
             grade: GradePass::new(
                 cc.wgpu_render_state
@@ -190,6 +192,14 @@ impl GalleryApp {
             last_sort: SortKey::Name,
             last_sort_desc: false,
         };
+
+        // Persistent LUTs: parse every stored .cube into the grade pass once.
+        for name in crate::luts::CubeLut::list() {
+            if let Some(cube) = crate::luts::CubeLut::load(&name) {
+                app.grade.import_lut(&cube);
+                app.lut_names.push(name);
+            }
+        }
 
         app.expanded.insert(home.clone());
         app.navigate(start_dir.unwrap_or(home));
@@ -244,8 +254,44 @@ impl GalleryApp {
         }
     }
 
-    fn pick_folder(&mut self) {
-        log::info!("folder picker: opening");
+    /// Import a `.cube` LUT: parse it, copy it into the persistent store and
+    /// upload it to the grade pass so it is available after restarts too.
+    pub(crate) fn import_lut(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Cube LUT", &["cube"])
+            .pick_file()
+        else {
+            return;
+        };
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            self.show_toast(format!("Cannot read {}", path.display()), true);
+            return;
+        };
+        let Some(name) = path.file_stem().map(|stem| stem.to_string_lossy().into_owned())
+        else {
+            return;
+        };
+        let Some(cube) = crate::luts::CubeLut::parse(name, &text) else {
+            self.show_toast("Not a valid 3D .cube LUT".to_owned(), true);
+            return;
+        };
+        if let Err(error) = cube.save() {
+            log::warn!("lut store failed: {error}");
+        }
+        if !self.lut_names.contains(&cube.name) {
+            self.lut_names.push(cube.name.clone());
+            self.lut_names.sort();
+        }
+        self.grade.import_lut(&cube);
+        // Attach to the image being edited.
+        if let Some(path) = self.current_viewer_path() {
+            self.edits.entry(path).or_default().lut = Some(cube.name.clone());
+        }
+        self.show_toast(format!("Imported LUT: {}", cube.name), false);
+    }
+
+    /// Startup-time loading of the persisted LUT list (done in `new`); kept
+    fn pick_folder(&mut self) {        log::info!("folder picker: opening");
         let mut dialog = rfd::FileDialog::new();
         if let Some(dir) = &self.current_dir {
             dialog = dialog.set_directory(dir);
@@ -1047,19 +1093,31 @@ impl GalleryApp {
         if self.edit_panel_open && full_texture.is_some() && dimensions.is_some() {
             let base = self.viewer.base_texture(&item.path, target);
             if let Some((base_id, base_view, base_size)) = base {
+                let source = dimensions.unwrap();
                 let state = self.edits.get(&item.path).cloned().unwrap_or_default();
-                if !state.is_identity() {
+                // While the crop frame is active the preview shows the full
+                // oriented frame without crop or straighten so the overlay
+                // and its drags stay anchored to a stable image.
+                let preview = if self.crop_active {
+                    let mut preview = state.clone();
+                    preview.crop = None;
+                    preview.rotation = 0.0;
+                    preview
+                } else {
+                    state
+                };
+                if !preview.is_identity() {
                     let graded = self.grade.ensure(
                         &item.path,
                         &base_view,
                         base_id,
                         base_size,
-                        dimensions.unwrap(),
-                        &state,
+                        source,
+                        &preview,
                     );
                     if let Some(graded) = graded {
                         texture_id = Some(graded);
-                        let display = state.display_size(dimensions.unwrap_or(base_size));
+                        let display = preview.display_size(source);
                         drawn_size = Some(Vec2::new(display[0] as f32, display[1] as f32));
                     }
                 }

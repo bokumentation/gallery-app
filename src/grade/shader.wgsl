@@ -37,12 +37,15 @@ struct ColorParams {
     wb_gains: vec3<f32>,
     saturation: f32,
     vibrance: f32,
+    has_lut: f32,
 };
 
 @group(0) @binding(0) var<uniform> par: Params;
 @group(0) @binding(1) var src_tex: texture_2d<f32>;
 @group(0) @binding(2) var<uniform> col: ColorParams;
 @group(0) @binding(3) var<storage, read_write> out_buf: array<u32>;
+@group(0) @binding(4) var src_lut: texture_3d<f32>;
+@group(0) @binding(5) var lut_sampler: sampler;
 
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -138,9 +141,19 @@ fn p_grade(sampled: vec4<f32>, coords: vec2<u32>) -> vec4<f32> {
     linear = p_creative_color(linear);
     var srgb = p_linear_to_srgb(linear);
     srgb = p_filmic_exposure(srgb);
+    srgb = p_lut(srgb);
     // Dither before quantization guards against banding.
     srgb += dither(coords) * (1.0 / 255.0);
     return vec4<f32>(srgb, sampled.a);
+}
+
+// Trilinear lookup in display space (sRGB-encoded); neutral-tonemap LUTs map
+// 1:1 through the linear-filtered 3D texture.
+fn p_lut(color: vec3<f32>) -> vec3<f32> {
+    if (col.has_lut < 0.5) {
+        return color;
+    }
+    return textureSampleLevel(src_lut, lut_sampler, color, 0.0).rgb;
 }
 
 fn p_pack(color: vec4<f32>) -> u32 {

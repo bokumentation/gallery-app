@@ -36,6 +36,9 @@ pub struct GradePass {
     layout: wgpu::BindGroupLayout,
     params: wgpu::Buffer,
     color: wgpu::Buffer,
+    neutral_lut: wgpu::TextureView,
+    sampler: wgpu::Sampler,
+    luts: std::collections::HashMap<String, wgpu::TextureView>,
     last: Option<GradedTexture>,
 }
 
@@ -90,6 +93,22 @@ impl GradePass {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D3,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -117,6 +136,33 @@ impl GradePass {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        // 1x1x1 placeholder bound whenever no LUT is attached (the shader
+        // skips sampling via `has_lut`).
+        let neutral = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("grade-neutral-lut"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D3,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let neutral_lut = neutral.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("grade-lut-sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            ..Default::default()
+        });
 
         Self {
             device,
@@ -126,6 +172,9 @@ impl GradePass {
             layout,
             params,
             color,
+            neutral_lut,
+            sampler,
+            luts: std::collections::HashMap::new(),
             last: None,
         }
     }
@@ -225,6 +274,11 @@ impl GradePass {
         let crop = self.crop_in_base_space(base_size, source_size, edit);
         let bytes = self.param_bytes(width, height, pitch, crop, base_size, source_size, edit);
 
+        let dispatch_lut = edit
+            .lut
+            .as_ref()
+            .and_then(|name| self.luts.get(name));
+        let lut_view = dispatch_lut.unwrap_or(&self.neutral_lut);
         let destination = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("grade-output"),
             size: pitch as u64 * height as u64,
@@ -250,6 +304,14 @@ impl GradePass {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: destination.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(lut_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
                 },
             ],
         });
@@ -416,6 +478,9 @@ impl GradePass {
         for (offset, value) in [(144, adjustments.saturation / 100.0), (148, adjustments.vibrance / 100.0)] {
             bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
         }
+        let has_lut: f32 = (edit.lut.is_some() && self.luts.contains_key(edit.lut.as_ref().unwrap()))
+            as u32 as f32;
+        bytes[152..156].copy_from_slice(&has_lut.to_le_bytes());
         bytes
     }
 }
@@ -429,5 +494,21 @@ fn pack_matrix(bytes: &mut [u8], at: usize, columns: [f32; 9]) {
             let value = columns[column * 3 + row];
             bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
         }
+    }
+}
+
+impl GradePass {
+    /// Parse, persist and upload a `.cube` LUT; returns the name on success.
+    pub fn import_lut(&mut self, cube: &crate::luts::CubeLut) -> Option<String> {
+        let texture = cube.upload(&self.device, &self.queue, "grade-lut");
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.luts.insert(cube.name.clone(), view);
+        Some(cube.name.clone())
+    }
+
+    /// True when a persisted LUT name is already resident on the GPU.
+    #[allow(dead_code)]
+    pub fn has_lut(&self, name: &str) -> bool {
+        self.luts.contains_key(name)
     }
 }
