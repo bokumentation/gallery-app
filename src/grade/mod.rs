@@ -1,6 +1,7 @@
 //! Edit state shared by the right panel, the preview grade pass and export.
 
 pub mod gpu;
+pub mod wb;
 
 /// A crop rectangle in pipeline-space pixels (after orientation steps and flips).
 #[derive(Clone, Copy, Debug, PartialEq, Default)]

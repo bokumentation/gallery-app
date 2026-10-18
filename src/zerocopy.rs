@@ -700,11 +700,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         max(1u, u32(floor(ratio.y + 0.5))),
     );
     let step = ratio / vec2<f32>(taps);
-    let center = (vec2<f32>(id) + vec2<f32>(0.5, 0.5)) * ratio - step * 0.5;
+    let center = (vec2<f32>(id.xy) + vec2<f32>(0.5, 0.5)) * ratio - step * 0.5;
     var sum = vec4<f32>(0.0);
     for (var i = 0u; i < taps.x; i = i + 1u) {
         for (var j = 0u; j < taps.y; j = j + 1u) {
-            let offset = vec2<f32>(i, j) * step;
+            let offset = vec2<f32>(f32(i), f32(j)) * step;
             let coords = clamp(round(center + offset), vec2<f32>(0.0), vec2<f32>(params.src) - vec2<f32>(1.0, 1.0));
             sum = sum + textureLoad(source, vec2<i32>(coords), 0);
         }

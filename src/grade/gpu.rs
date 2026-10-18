@@ -2,6 +2,7 @@
 //! steps, flips, free rotation, crop) and color grading to the base texture,
 //! modelled on the zero-copy converter in `zerocopy.rs`.
 
+use super::wb;
 use super::{CropRect, EditState};
 use egui::TextureId;
 use egui_wgpu::RenderState;
@@ -12,6 +13,8 @@ use wgpu::Queue;
 /// Uniform-block mirror of `grade/shader.wgsl::Params` (64 bytes).
 const PARAMS_SIZE: u64 = 64;
 
+/// Uniform-block mirror of `grade/shader.wgsl::ColorParams` (160 bytes).
+const COLOR_SIZE: u64 = 160;
 struct GradedTexture {
     id: TextureId,
     key: GradeKey,
@@ -32,6 +35,7 @@ pub struct GradePass {
     pipeline: wgpu::ComputePipeline,
     layout: wgpu::BindGroupLayout,
     params: wgpu::Buffer,
+    color: wgpu::Buffer,
     last: Option<GradedTexture>,
 }
 
@@ -70,6 +74,16 @@ impl GradePass {
                     binding: 2,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },
                         has_dynamic_offset: false,
                         min_binding_size: None,
@@ -97,6 +111,12 @@ impl GradePass {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let color = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("grade-color"),
+            size: COLOR_SIZE,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
 
         Self {
             device,
@@ -105,6 +125,7 @@ impl GradePass {
             pipeline,
             layout,
             params,
+            color,
             last: None,
         }
     }
@@ -224,6 +245,10 @@ impl GradePass {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
+                    resource: self.color.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
                     resource: destination.as_entire_binding(),
                 },
             ],
@@ -249,6 +274,8 @@ impl GradePass {
             .write()
             .register_native_texture(&self.device, &view, wgpu::FilterMode::Linear);
         self.queue.write_buffer(&self.params, 0, &bytes);
+        self.queue
+            .write_buffer(&self.color, 0, &self.color_bytes(edit));
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -348,5 +375,59 @@ impl GradePass {
             bytes[offset..offset + 4].copy_from_slice(&flag.to_le_bytes());
         }
         bytes
+    }
+
+    /// Pre-scaled color values — `ColorParams` at 160 bytes: eight scalars,
+    /// two 3x3 white-balance matrices, log gains and the two chroma sliders.
+    /// The scaling table is the reference implementation's SCALES map.
+    fn color_bytes(&self, edit: &EditState) -> [u8; COLOR_SIZE as usize] {
+        let mut bytes = [0u8; COLOR_SIZE as usize];
+        let adjustments = &edit.adjustments;
+
+        let scalars: [(usize, f32); 8] = [
+            (0, adjustments.exposure * 0.8),
+            (4, adjustments.brightness * 0.8),
+            (8, adjustments.contrast / 100.0),
+            (12, adjustments.highlights / 120.0),
+            (16, adjustments.shadows / 120.0),
+            (20, adjustments.whites / 40.0),
+            (24, adjustments.blacks / 40.0),
+            (28, adjustments.hue),
+        ];
+        for (offset, value) in scalars {
+            bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+
+        // White balance: reference D65 current, warmed/cooled by the slider.
+        // mat3x3 uniform columns are 16-byte aligned: three floats then a
+        // 4-byte pad per column.
+        let rgb_to_lms = wb::rgb_to_lms_columns();
+        let lms_to_rgb = wb::lms_to_rgb_columns();
+        pack_matrix(&mut bytes, 32, rgb_to_lms);
+        pack_matrix(&mut bytes, 80, lms_to_rgb);
+
+        let current = wb::WhiteBalance::reference();
+        let target = current.shifted(adjustments.temperature as f64, adjustments.tint as f64);
+        let gains = wb::adaptation_log_gains(current, target);
+        for (index, value) in gains.into_iter().enumerate() {
+            let offset = 128 + index * 4;
+            bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        for (offset, value) in [(144, adjustments.saturation / 100.0), (148, adjustments.vibrance / 100.0)] {
+            bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        bytes
+    }
+}
+
+/// Flatten column-major `[f32; 9]` into a WGSL `mat3x3` uniform layout: each
+/// of the three columns takes 16 bytes (three floats plus a pad).
+fn pack_matrix(bytes: &mut [u8], at: usize, columns: [f32; 9]) {
+    for column in 0..3 {
+        for row in 0..3 {
+            let offset = at + column * 16 + row * 4;
+            let value = columns[column * 3 + row];
+            bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
     }
 }
